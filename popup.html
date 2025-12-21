@@ -1,1 +1,198 @@
- 
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Handy Connector</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f2ebe1;
+        --bg-accent: #f8e2bd;
+        --surface: rgba(255, 255, 255, 0.9);
+        --border: #d6c9b6;
+        --text: #211d17;
+        --muted: #6a5f51;
+        --accent: #187c6b;
+        --accent-soft: #d7efe8;
+        --error: #b42318;
+        --shadow: 0 12px 26px rgba(55, 42, 24, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        padding: 14px;
+        font-family: "Trebuchet MS", "Gill Sans", "Calibri", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top, var(--bg-accent), transparent 58%),
+          linear-gradient(160deg, #f7f1e6, var(--bg));
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: 0.3px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 28px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 700;
+        font-size: 12px;
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px;
+        box-shadow: var(--shadow);
+      }
+
+      .card + .card {
+        margin-top: 10px;
+      }
+
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      input[type="number"] {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: #fff;
+        font-size: 14px;
+        transition: border 140ms ease, box-shadow 140ms ease;
+      }
+
+      input[type="number"]:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(24, 124, 107, 0.2);
+      }
+
+      input[type="number"].invalid {
+        border-color: var(--error);
+        box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.2);
+      }
+
+      .server {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .server-url {
+        font-weight: 600;
+        color: var(--text);
+        text-align: right;
+      }
+
+      .status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+        min-height: 18px;
+      }
+
+      .status.error {
+        color: var(--error);
+      }
+
+      .messages {
+        display: grid;
+        gap: 8px;
+        max-height: 320px;
+        overflow: auto;
+        padding-right: 2px;
+      }
+
+      .message {
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        padding: 8px 10px;
+        background: #fff;
+        animation: rise 160ms ease;
+      }
+
+      .message-time {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .message-text {
+        font-size: 13px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .empty {
+        text-align: center;
+        font-size: 12px;
+        color: var(--muted);
+        padding: 8px;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Handy Connector</h1>
+      <span class="badge" id="message-count">0</span>
+    </header>
+
+    <section class="card">
+      <label for="port">Port</label>
+      <input id="port" type="number" min="1" max="65535" step="1" inputmode="numeric" />
+      <div class="server">
+        <span>Server</span>
+        <span class="server-url" id="server-url"></span>
+      </div>
+      <div class="status" id="status"></div>
+    </section>
+
+    <section class="card">
+      <div class="messages" id="messages"></div>
+    </section>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

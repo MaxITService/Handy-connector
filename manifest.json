@@ -19,8 +19,16 @@
     },
     "default_title": "Handy-connector"
   },
+  "background": {
+    "service_worker": "sw.js"
+  },
   "permissions": [
+    "alarms",
     "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "content_scripts": [
     {
