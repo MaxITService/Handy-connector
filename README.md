@@ -1,0 +1,1 @@
+Handy chrome extenson that connects it to ChatGPT for quick access to AI assistance

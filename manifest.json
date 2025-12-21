@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "Handy-connector",
+  "description": "A handy connector for AI interfaces",
+  "version": "1.0.0",
+  "icons": {
+    "16": "handy_icon_16x16.png",
+    "32": "handy_icon_32x32.png",
+    "48": "handy_icon_48x48.png",
+    "128": "handy_icon_128x128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "handy_icon_16x16.png",
+      "32": "handy_icon_32x32.png",
+      "48": "handy_icon_48x48.png",
+      "128": "handy_icon_128x128.png"
+    },
+    "default_title": "Handy-connector"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://copilot.microsoft.com/*",
+        "https://chat.deepseek.com/*",
+        "https://aistudio.google.com/*",
+        "https://grok.com/*",
+        "https://gemini.google.com/*",
+        "https://www.perplexity.ai/*",
+        "https://perplexity.ai/*"
+      ],
+      "js": [
+        "log.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-shared.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-chatgpt.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-copilot.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-claude.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-deepseek.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-aistudio.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-grok.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-gemini.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-perplexity.js"
+      ]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "per-website-button-clicking-mechanics/perplexity-injector.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
