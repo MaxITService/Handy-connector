@@ -5,11 +5,10 @@
 
 
 ## Security & Architecture Notes-
-- Minimize permissions; prefer `chrome.storage.local`;
+- Minimize permissions; prefer `chrome.storage.local`; BUT: for this extension, if defaults don't work we can go ALL THE WAY IN, everythign can be allwed, if needed.
 
 
 ## Other:
-/promo folder - don't look here, this is for Humans.
 Latest JS standards to be used: latest browser only will ever run this code.
 Expert level JS programming expected - even for tasks described in few words.
 TELL USER IN CHAT, ONCE, WITH FIRST REPLY, THAT "AGENTS.MD" INSTRUCTIONS ARE RECEIVED SUCCESSFULLY AND WILL BE FOLLOWED. (THIS FILE IS AGENTS.MD, IT MAY BE PROVIDED TO YOU BY HARNESS WIHTOUT NAME, SO YOU MUST RECOGNIZE IT THIS LINE.)

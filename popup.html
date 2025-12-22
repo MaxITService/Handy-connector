@@ -126,6 +126,29 @@
         color: var(--error);
       }
 
+      .toggle-row {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .toggle-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+      }
+
+      .toggle-label input {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--accent);
+      }
+
       .messages {
         display: grid;
         gap: 8px;
@@ -161,6 +184,116 @@
         padding: 8px;
       }
 
+      .keepalive-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #ccc;
+        transition: background 300ms ease, box-shadow 300ms ease;
+      }
+
+      .keepalive-indicator.active {
+        background: #2ecc71;
+        box-shadow: 0 0 8px rgba(46, 204, 113, 0.6);
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 140ms ease, transform 140ms ease;
+      }
+
+      .btn-primary:hover {
+        opacity: 0.9;
+      }
+
+      .btn-primary:active {
+        transform: scale(0.96);
+      }
+
+      .btn-secondary {
+        background: #fff;
+        color: var(--accent);
+        border: 1px solid var(--border);
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 140ms ease, transform 140ms ease;
+      }
+
+      .btn-secondary:hover {
+        opacity: 0.9;
+      }
+
+      .btn-secondary:active {
+        transform: scale(0.96);
+      }
+
+      .btn-secondary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .btn-danger {
+        background: #fff;
+        color: var(--error);
+        border: 1px solid rgba(180, 35, 24, 0.35);
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 140ms ease, transform 140ms ease;
+      }
+
+      .btn-danger:hover {
+        opacity: 0.9;
+      }
+
+      .btn-danger:active {
+        transform: scale(0.96);
+      }
+
+      .btn-danger:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .port-actions {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .messages-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      .tab-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
       @keyframes rise {
         from {
           opacity: 0;
@@ -175,7 +308,10 @@
   </head>
   <body>
     <header>
-      <h1>Handy Connector</h1>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <h1>Handy Connector</h1>
+        <div id="keepalive-indicator" class="keepalive-indicator" title="Keepalive Status"></div>
+      </div>
       <span class="badge" id="message-count">0</span>
     </header>
 
@@ -187,9 +323,29 @@
         <span class="server-url" id="server-url"></span>
       </div>
       <div class="status" id="status"></div>
+
+      <div class="toggle-row">
+        <label class="toggle-label" for="auto-send">
+          <input id="auto-send" type="checkbox" />
+          Auto-send
+        </label>
+        <span style="font-size: 11px;">On by default</span>
+      </div>
+      
+      <div class="port-actions">
+        <div class="tab-actions">
+          <button id="bind-tab" class="btn-primary">Bind to Tab</button>
+          <button id="unbind-tab" class="btn-secondary" disabled>Unbind</button>
+        </div>
+        <span id="bound-status" style="font-size: 11px; color: var(--muted); flex: 1; text-align: right;">No tab bound</span>
+      </div>
     </section>
 
     <section class="card">
+      <div class="messages-header">
+        <span>Messages</span>
+        <button id="clear-messages" class="btn-danger" type="button">Clear</button>
+      </div>
       <div class="messages" id="messages"></div>
     </section>
 

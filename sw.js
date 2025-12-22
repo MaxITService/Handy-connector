@@ -1,20 +1,23 @@
 const DEFAULT_SETTINGS = {
   host: "127.0.0.1",
-  port: 55155,
+  port: 63155,
   path: "/messages",
   pollMinutes: 0.1,
-  timeoutMs: 3000
+  timeoutMs: 3000,
+  autoSend: true
 };
 
 const STATUS_DEFAULT = {
   lastPollAt: null,
   lastSuccessAt: null,
   lastError: null,
-  connected: false
+  connected: false,
+  lastKeepaliveAt: null
 };
 
 const MAX_MESSAGES = 200;
 const ALARM_NAME = "poll-messages";
+const STATUS_PREFIX = "[hc-status]";
 
 let pollInFlight = false;
 
@@ -43,12 +46,56 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!changeInfo.title && !changeInfo.url) return;
+  chrome.storage.local.get({ boundTabId: null }).then(({ boundTabId }) => {
+    if (boundTabId !== tabId) return;
+    const info = buildTabInfo(tab);
+    chrome.storage.local.set({ boundTabInfo: info });
+  });
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.storage.local.get({ boundTabId: null }).then(({ boundTabId }) => {
+    if (boundTabId !== tabId) return;
+    chrome.storage.local.set({ boundTabId: null, boundTabInfo: null });
+  });
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "POLL_NOW") {
     pollOnce()
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
+  }
+  if (message?.type === "REPORT_STATUS") {
+    sendStatus(message.payload)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (message?.type === "BIND_TAB") {
+    bindTabById(message.tabId)
+      .then((info) => sendResponse({ ok: true, boundTabId: info?.id ?? null }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (message?.type === "UNBIND_TAB") {
+    chrome.storage.local.set({ boundTabId: null, boundTabInfo: null })
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (message?.type === "TOGGLE_BIND") {
+    toggleBindForSender(sender)
+      .then((info) => sendResponse({ ok: true, boundTabId: info?.id ?? null }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (message?.type === "GET_TAB_CONTEXT") {
+    sendResponse({ ok: true, tabId: sender?.tab?.id ?? null });
+    return false;
   }
   return false;
 });
@@ -58,7 +105,9 @@ async function ensureDefaults() {
     settings: {},
     messages: [],
     status: STATUS_DEFAULT,
-    cursor: null
+    cursor: null,
+    boundTabId: null,
+    boundTabInfo: null
   });
 
   const mergedSettings = { ...DEFAULT_SETTINGS, ...stored.settings };
@@ -74,12 +123,23 @@ async function ensureDefaults() {
     }
   }
   if (stored.cursor === undefined) updates.cursor = null;
+  if (stored.boundTabId === undefined) updates.boundTabId = null;
+  if (stored.boundTabInfo === undefined) updates.boundTabInfo = null;
   if (JSON.stringify(mergedSettings) !== JSON.stringify(stored.settings)) {
     updates.settings = mergedSettings;
   }
 
   if (Object.keys(updates).length) {
     await chrome.storage.local.set(updates);
+  }
+
+  if (Number.isInteger(stored.boundTabId) && !stored.boundTabInfo) {
+    try {
+      const tab = await chrome.tabs.get(stored.boundTabId);
+      await chrome.storage.local.set({ boundTabInfo: buildTabInfo(tab) });
+    } catch {
+      await chrome.storage.local.set({ boundTabId: null, boundTabInfo: null });
+    }
   }
 }
 
@@ -93,6 +153,48 @@ function sanitizePollMinutes(value) {
   const minutes = Number(value);
   if (!Number.isFinite(minutes)) return DEFAULT_SETTINGS.pollMinutes;
   return Math.max(0.1, minutes);
+}
+
+function buildTabInfo(tab) {
+  if (!tab) return null;
+  return {
+    id: tab.id ?? null,
+    title: typeof tab.title === "string" ? tab.title : "",
+    url: typeof tab.url === "string" ? tab.url : ""
+  };
+}
+
+async function bindTabById(tabId) {
+  if (!Number.isInteger(tabId)) {
+    await chrome.storage.local.set({ boundTabId: null, boundTabInfo: null });
+    return null;
+  }
+
+  let info = null;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    info = buildTabInfo(tab);
+  } catch {
+    info = { id: tabId, title: "", url: "" };
+  }
+
+  await chrome.storage.local.set({ boundTabId: tabId, boundTabInfo: info });
+  return info;
+}
+
+async function toggleBindForSender(sender) {
+  const senderTabId = sender?.tab?.id;
+  if (!Number.isInteger(senderTabId)) {
+    throw new Error("No sender tab available for bind toggle");
+  }
+
+  const { boundTabId } = await chrome.storage.local.get({ boundTabId: null });
+  if (boundTabId === senderTabId) {
+    await chrome.storage.local.set({ boundTabId: null, boundTabInfo: null });
+    return null;
+  }
+
+  return await bindTabById(senderTabId);
 }
 
 async function pollOnce() {
@@ -117,18 +219,40 @@ async function pollOnce() {
     const parsed = parseMaybeJson(bodyText);
     const messages = normalizeMessages(parsed, bodyText);
 
-    if (messages.length) {
-      await appendMessages(messages);
+    const keepalives = messages.filter(isKeepaliveMessage);
+    const regularMessages = messages.filter((msg) => !isKeepaliveMessage(msg) && !isStatusMessage(msg));
+
+    if (keepalives.length > 0) {
+      void sendAck(settings);
+    }
+
+    if (regularMessages.length) {
+      await appendMessages(regularMessages);
+
+      const { boundTabId } = await chrome.storage.local.get("boundTabId");
+      if (boundTabId) {
+        for (const msg of regularMessages) {
+          try {
+            await chrome.tabs.sendMessage(boundTabId, { type: "NEW_MESSAGE", text: msg.text });
+          } catch (err) {
+            console.warn("Failed to send message to tab", boundTabId, err);
+          }
+        }
+      }
     }
 
     const nextCursor = extractCursor(parsed, messages);
+    const { status: prevStatus } = await chrome.storage.local.get({ status: STATUS_DEFAULT });
+
     await chrome.storage.local.set({
       cursor: nextCursor ?? cursor,
       status: {
+        ...prevStatus,
         lastPollAt: Date.now(),
         lastSuccessAt: Date.now(),
         lastError: null,
-        connected: true
+        connected: true,
+        lastKeepaliveAt: keepalives.length ? Date.now() : prevStatus.lastKeepaliveAt
       }
     });
   } catch (err) {
@@ -151,6 +275,66 @@ async function pollOnce() {
     pollInFlight = false;
   }
 }
+
+async function sendAck(settings) {
+  try {
+    const url = buildRequestUrl(settings, null);
+    await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ type: 'keepalive_ack', ts: Date.now() }),
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (e) {
+    console.warn("Failed to send ack", e);
+  }
+}
+
+function isKeepaliveMessage(message) {
+  if (!message) return false;
+  if (typeof message.text === "string" && message.text.trim() === "keepalive") {
+    return true;
+  }
+  return message.raw && message.raw.type === "keepalive";
+}
+
+function isStatusMessage(message) {
+  if (!message) return false;
+  if (message.raw && message.raw.type === "status") return true;
+  if (typeof message.text !== "string") return false;
+  return message.text.trim().startsWith(STATUS_PREFIX);
+}
+
+async function sendStatus(payload = {}) {
+  const settings = await getSettings();
+  const timeoutMs = Number(settings.timeoutMs) || DEFAULT_SETTINGS.timeoutMs;
+  const url = buildRequestUrl(settings, null);
+  const statusPayload = buildStatusPayload(payload);
+  const response = await postJsonWithTimeout(url, statusPayload, timeoutMs);
+  if (!response.ok) {
+    const bodyText = await response.text();
+    throw new Error(`HTTP ${response.status}: ${bodyText || "No response body"}`);
+  }
+}
+
+function buildStatusPayload(payload) {
+  const status = payload?.status ? String(payload.status) : "unknown";
+  const site = payload?.site ? String(payload.site) : "Unknown";
+  const detail = payload?.detail ? String(payload.detail) : "";
+  const preview = payload?.messagePreview ? String(payload.messagePreview).trim() : "";
+  const detailSuffix = detail ? ` - ${detail}` : "";
+  const previewSuffix = preview ? ` | ${preview}` : "";
+
+  return {
+    type: "status",
+    status,
+    site,
+    detail: detail || null,
+    messagePreview: preview || null,
+    ts: Date.now(),
+    text: `${STATUS_PREFIX} ${status} ${site}${detailSuffix}${previewSuffix}`
+  };
+}
+
 
 async function getSettings() {
   const { settings } = await chrome.storage.local.get({
@@ -179,6 +363,23 @@ async function fetchWithTimeout(url, timeoutMs) {
 
   try {
     return await fetch(url, { cache: "no-store", signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function postJsonWithTimeout(url, payload, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      method: "POST",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
   } finally {
     clearTimeout(timeoutId);
   }

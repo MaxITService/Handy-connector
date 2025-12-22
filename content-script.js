@@ -1,0 +1,1004 @@
+'use strict';
+
+const STATUS_PREFIX = "[hc-status]";
+let messageInFlight = false;
+
+const UI_DEFAULT_SETTINGS = {
+  host: "127.0.0.1",
+  port: 63155,
+  path: "/messages",
+  autoSend: true
+};
+
+const FLOATING_UI_ID = "hc-floating-ui";
+const FLOATING_STYLE_ID = "hc-floating-ui-style";
+const MAX_FLOATING_MESSAGES = 8;
+const FLOATING_POSITION_KEY = "floatingUiPositions";
+const FLOATING_POSITION_MARGIN = 12;
+const DRAG_THRESHOLD_PX = 4;
+
+let floatingState = {
+  settings: { ...UI_DEFAULT_SETTINGS },
+  status: null,
+  messages: [],
+  boundTabId: null,
+  boundTabInfo: null
+};
+
+let floatingEls = null;
+let floatingSaveTimer = null;
+let currentTabId = null;
+let floatingPositionKey = "";
+let floatingPositionsCache = {};
+let dragState = null;
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== "NEW_MESSAGE") return;
+  void handleIncomingMessage(message);
+});
+
+async function handleIncomingMessage(message) {
+  const text = normalizeIncomingText(message?.text);
+  if (!text || isStatusText(text)) return;
+
+  if (messageInFlight) {
+    notifyBusyDrop();
+    reportStatus("dropped_busy", {
+      site: window.InjectionTargetsOnWebsite?.activeSite || "Unknown",
+      detail: "in_flight"
+    });
+    return;
+  }
+
+  messageInFlight = true;
+  try {
+    const site = window.InjectionTargetsOnWebsite?.activeSite || "Unknown";
+    if (!isSupportedSite(site)) {
+      reportStatus("unsupported_site", { site });
+      return;
+    }
+
+    if (window.ButtonsClickingShared?.findStopButton?.()) {
+      notifyBusyDrop();
+      reportStatus("dropped_busy", { site, detail: "stop_visible" });
+      return;
+    }
+
+    const autoSend = await getAutoSendSetting();
+    const result = await dispatchToSite(site, text, autoSend);
+    handleResult(result, { site, autoSend });
+  } finally {
+    messageInFlight = false;
+  }
+}
+
+function normalizeIncomingText(value) {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  return String(value);
+}
+
+function isStatusText(text) {
+  return text.trim().startsWith(STATUS_PREFIX);
+}
+
+function isSupportedSite(site) {
+  return site === "ChatGPT" || site === "Perplexity";
+}
+
+async function getAutoSendSetting() {
+  const { settings } = await chrome.storage.local.get({
+    settings: { autoSend: true }
+  });
+  return settings?.autoSend !== false;
+}
+
+async function dispatchToSite(site, text, autoSend) {
+  if (site === "ChatGPT" && typeof window.processChatGPTIncomingMessage === "function") {
+    return await window.processChatGPTIncomingMessage(text, { autoSend });
+  }
+  if (site === "Perplexity" && typeof window.processPerplexityIncomingMessage === "function") {
+    return await window.processPerplexityIncomingMessage(text, { autoSend });
+  }
+  return { status: "unsupported_site" };
+}
+
+function handleResult(result, context) {
+  const site = context.site || "Unknown";
+  const status = result?.status || "unknown";
+  const reason = result?.reason ? String(result.reason) : "";
+
+  if (status === "busy") {
+    notifyBusyDrop();
+    reportStatus("dropped_busy", { site, detail: reason || "busy" });
+    return;
+  }
+
+  if (status === "editor_not_found") {
+    notifyEditorMissing();
+    reportStatus("editor_not_found", { site });
+    return;
+  }
+
+  if (status === "send_not_found" || status === "send_disabled" || status === "validation_failed") {
+    notifySendMissing();
+    reportStatus("send_not_found", { site, detail: reason || status });
+    return;
+  }
+
+  if (status === "sent") {
+    reportStatus("sent", { site });
+    return;
+  }
+
+  if (status === "pasted") {
+    reportStatus("pasted", { site });
+    return;
+  }
+
+  if (status === "insert_failed") {
+    reportStatus("insert_failed", { site });
+    return;
+  }
+
+  if (status === "unsupported_site") {
+    reportStatus("unsupported_site", { site });
+    return;
+  }
+
+  reportStatus("unknown", { site, detail: status });
+}
+
+function reportStatus(status, payload = {}) {
+  try {
+    chrome.runtime.sendMessage({
+      type: "REPORT_STATUS",
+      payload: { status, ...payload }
+    });
+  } catch {
+    // Ignore if service worker is not ready yet.
+  }
+}
+
+function notifyBusyDrop() {
+  if (typeof showToast === "function") {
+    showToast("AI is still typing. Message dropped.", "info");
+  }
+}
+
+function notifyEditorMissing() {
+  if (typeof showToast === "function") {
+    showToast("Editor not found.", "error");
+  }
+}
+
+function notifySendMissing() {
+  if (typeof showToast === "function") {
+    showToast("Send button not found.", "error");
+  }
+}
+
+function initFloatingUi() {
+  if (window.top !== window) return;
+  if (!document.body || document.getElementById(FLOATING_UI_ID)) return;
+
+  injectFloatingStyles();
+  floatingEls = buildFloatingUi();
+  document.body.appendChild(floatingEls.root);
+
+  floatingEls.toggleBtn.addEventListener("click", () => {
+    setFloatingCollapsed(isFloatingExpanded());
+  });
+
+  floatingEls.collapseBtn.addEventListener("click", () => {
+    setFloatingCollapsed(true);
+  });
+
+  floatingEls.bindToggleBtn.addEventListener("click", () => {
+    void toggleBinding();
+  });
+
+  floatingEls.portInput.addEventListener("input", handlePortInputChange);
+  floatingEls.autoSendInput.addEventListener("change", handleAutoSendChange);
+  if (floatingEls.clearMessagesBtn) {
+    floatingEls.clearMessagesBtn.addEventListener("click", () => {
+      void clearStoredMessages();
+    });
+  }
+
+  floatingPositionKey = buildPositionKey();
+  setupFloatingDrag();
+  void applyStoredPosition();
+
+  chrome.storage.onChanged.addListener(handleFloatingStorageChange);
+
+  void refreshFloatingState();
+}
+
+function injectFloatingStyles() {
+  if (document.getElementById(FLOATING_STYLE_ID)) return;
+
+  const style = document.createElement("style");
+  style.id = FLOATING_STYLE_ID;
+  style.textContent = `
+#${FLOATING_UI_ID} {
+  --hc-bg: rgba(248, 243, 235, 0.88);
+  --hc-border: rgba(214, 201, 182, 0.7);
+  --hc-text: #211d17;
+  --hc-muted: #6a5f51;
+  --hc-accent: #187c6b;
+  --hc-accent-soft: rgba(24, 124, 107, 0.18);
+  --hc-shadow: 0 14px 30px rgba(33, 29, 23, 0.18);
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2147483647;
+  font-family: "Trebuchet MS", "Gill Sans", "Calibri", sans-serif;
+  color: var(--hc-text);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: flex-end;
+}
+
+#${FLOATING_UI_ID} * {
+  box-sizing: border-box;
+}
+
+#${FLOATING_UI_ID} button {
+  all: unset;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+#${FLOATING_UI_ID} input {
+  font-family: inherit;
+}
+
+#${FLOATING_UI_ID} .hc-min {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 999px;
+  background: var(--hc-bg);
+  border: 1px solid var(--hc-border);
+  box-shadow: var(--hc-shadow);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+}
+
+#${FLOATING_UI_ID} .hc-drag-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+#${FLOATING_UI_ID} .hc-drag-handle:active {
+  cursor: grabbing;
+}
+
+#${FLOATING_UI_ID} .hc-toggle {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  color: var(--hc-text);
+}
+
+#${FLOATING_UI_ID} .hc-bind-toggle {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+#${FLOATING_UI_ID} .hc-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9aa0a6;
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+
+#${FLOATING_UI_ID}[data-bound="true"] .hc-dot {
+  background: #2ecc71;
+  box-shadow: 0 0 10px rgba(46, 204, 113, 0.7);
+}
+
+#${FLOATING_UI_ID} .hc-panel {
+  width: 340px;
+  max-height: 70vh;
+  overflow: hidden;
+  background: var(--hc-bg);
+  border: 1px solid var(--hc-border);
+  border-radius: 16px;
+  box-shadow: var(--hc-shadow);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  padding: 12px;
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 160ms ease, transform 160ms ease, max-height 160ms ease;
+}
+
+#${FLOATING_UI_ID}[data-collapsed="true"] .hc-panel {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  max-height: 0;
+  padding: 0;
+  border-color: transparent;
+}
+
+#${FLOATING_UI_ID} .hc-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+#${FLOATING_UI_ID} .hc-title-text {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.2px;
+}
+
+#${FLOATING_UI_ID} .hc-bind-text {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--hc-muted);
+}
+
+#${FLOATING_UI_ID} .hc-collapse {
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  color: var(--hc-text);
+}
+
+#${FLOATING_UI_ID} .hc-section {
+  margin-top: 10px;
+}
+
+#${FLOATING_UI_ID} .hc-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--hc-muted);
+  margin-top: 6px;
+}
+
+#${FLOATING_UI_ID} .hc-value {
+  color: var(--hc-text);
+  font-weight: 600;
+  text-align: right;
+  max-width: 65%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#${FLOATING_UI_ID} .hc-status.is-error {
+  color: #b42318;
+}
+
+#${FLOATING_UI_ID} .hc-input-label {
+  font-size: 11px;
+  color: var(--hc-muted);
+}
+
+#${FLOATING_UI_ID} .hc-input {
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  color: var(--hc-text);
+}
+
+#${FLOATING_UI_ID} .hc-input.invalid {
+  border-color: #b42318;
+  box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.2);
+}
+
+#${FLOATING_UI_ID} .hc-checkbox {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--hc-muted);
+}
+
+#${FLOATING_UI_ID} .hc-checkbox input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--hc-accent);
+}
+
+#${FLOATING_UI_ID} .hc-messages-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--hc-muted);
+}
+
+#${FLOATING_UI_ID} .hc-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#${FLOATING_UI_ID} .hc-count {
+  min-width: 24px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--hc-accent-soft);
+  color: var(--hc-accent);
+  font-weight: 700;
+  font-size: 11px;
+  text-align: center;
+}
+
+#${FLOATING_UI_ID} .hc-clear-btn {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #b42318;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(180, 35, 24, 0.35);
+}
+
+#${FLOATING_UI_ID} .hc-clear-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#${FLOATING_UI_ID} .hc-messages-list {
+  margin-top: 8px;
+  max-height: 220px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  padding-right: 2px;
+}
+
+#${FLOATING_UI_ID} .hc-message {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.8);
+  padding: 6px 8px;
+}
+
+#${FLOATING_UI_ID} .hc-message-time {
+  font-size: 10px;
+  color: var(--hc-muted);
+  margin-bottom: 4px;
+}
+
+#${FLOATING_UI_ID} .hc-message-text {
+  font-size: 11px;
+  color: var(--hc-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#${FLOATING_UI_ID} .hc-empty {
+  font-size: 11px;
+  color: var(--hc-muted);
+  text-align: center;
+  padding: 8px 0;
+}
+`;
+  const target = document.head || document.documentElement;
+  target.appendChild(style);
+}
+
+function buildFloatingUi() {
+  const root = document.createElement("div");
+  root.id = FLOATING_UI_ID;
+  root.dataset.collapsed = "true";
+  root.dataset.bound = "false";
+
+  root.innerHTML = `
+    <div class="hc-min hc-drag-handle">
+      <button class="hc-toggle" type="button" aria-expanded="false" title="Open panel">HC</button>
+      <button class="hc-bind-toggle" type="button" aria-pressed="false" title="Toggle bind for this tab">
+        <span class="hc-dot"></span>
+      </button>
+    </div>
+    <div class="hc-panel" role="dialog" aria-label="Handy Connector panel">
+      <div class="hc-panel-header hc-drag-handle">
+        <div>
+          <div class="hc-title-text">Handy Connector</div>
+          <div class="hc-bind-text" id="hc-bind-text">No tab bound</div>
+        </div>
+        <button class="hc-collapse" type="button" title="Collapse">Close</button>
+      </div>
+      <div class="hc-section">
+        <div class="hc-row">
+          <span class="hc-label">Server</span>
+          <span class="hc-value" id="hc-server-url"></span>
+        </div>
+        <div class="hc-row">
+          <span class="hc-label">Status</span>
+          <span class="hc-value hc-status" id="hc-status"></span>
+        </div>
+      </div>
+      <div class="hc-section">
+        <label class="hc-input-label" for="hc-port">Port</label>
+        <input id="hc-port" class="hc-input" type="number" min="1" max="65535" step="1" inputmode="numeric" />
+        <label class="hc-checkbox">
+          <input id="hc-auto-send" type="checkbox" />
+          Auto-send
+        </label>
+      </div>
+      <div class="hc-section">
+        <div class="hc-messages-header">
+          <span>Messages</span>
+          <div class="hc-actions">
+            <span class="hc-count" id="hc-message-count">0</span>
+            <button class="hc-clear-btn" id="hc-clear-messages" type="button">Clear</button>
+          </div>
+        </div>
+        <div class="hc-messages-list" id="hc-messages"></div>
+      </div>
+    </div>
+  `;
+
+  return {
+    root,
+    minBar: root.querySelector(".hc-min"),
+    panelHeader: root.querySelector(".hc-panel-header"),
+    toggleBtn: root.querySelector(".hc-toggle"),
+    bindToggleBtn: root.querySelector(".hc-bind-toggle"),
+    collapseBtn: root.querySelector(".hc-collapse"),
+    bindTextEl: root.querySelector("#hc-bind-text"),
+    serverUrlEl: root.querySelector("#hc-server-url"),
+    statusEl: root.querySelector("#hc-status"),
+    portInput: root.querySelector("#hc-port"),
+    autoSendInput: root.querySelector("#hc-auto-send"),
+    messageCountEl: root.querySelector("#hc-message-count"),
+    clearMessagesBtn: root.querySelector("#hc-clear-messages"),
+    messagesEl: root.querySelector("#hc-messages")
+  };
+}
+
+function isFloatingExpanded() {
+  return floatingEls?.root?.dataset.collapsed === "false";
+}
+
+function setFloatingCollapsed(collapsed) {
+  if (!floatingEls) return;
+  const next = collapsed ? "true" : "false";
+  floatingEls.root.dataset.collapsed = next;
+  floatingEls.toggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+}
+
+function buildPositionKey() {
+  try {
+    const url = new URL(window.location.href);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return window.location.href;
+  }
+}
+
+function setupFloatingDrag() {
+  if (!floatingEls) return;
+  const handles = [floatingEls.minBar, floatingEls.panelHeader];
+  for (const handle of handles) {
+    if (!handle) continue;
+    handle.addEventListener("pointerdown", handleDragStart);
+  }
+}
+
+async function applyStoredPosition() {
+  if (!floatingEls || !floatingPositionKey) return;
+  const stored = await chrome.storage.local.get({ [FLOATING_POSITION_KEY]: {} });
+  const map = normalizePositionsMap(stored[FLOATING_POSITION_KEY]);
+  floatingPositionsCache = map;
+  const saved = map[floatingPositionKey] || null;
+  requestAnimationFrame(() => {
+    const rect = floatingEls.root.getBoundingClientRect();
+    const resolved = resolveFloatingPosition(saved, rect);
+    setFloatingPosition(resolved);
+  });
+}
+
+function normalizePositionsMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value;
+}
+
+function resolveFloatingPosition(saved, rect) {
+  const maxX = Math.max(0, window.innerWidth - rect.width - FLOATING_POSITION_MARGIN);
+  const maxY = Math.max(0, window.innerHeight - rect.height - FLOATING_POSITION_MARGIN);
+  const minX = Math.min(FLOATING_POSITION_MARGIN, maxX);
+  const minY = Math.min(FLOATING_POSITION_MARGIN, maxY);
+
+  let x = Number.isFinite(saved?.x) ? saved.x : maxX;
+  let y = Number.isFinite(saved?.y) ? saved.y : maxY;
+
+  x = clampValue(x, minX, maxX);
+  y = clampValue(y, minY, maxY);
+
+  return { x, y };
+}
+
+function clampValue(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function setFloatingPosition(position) {
+  if (!floatingEls || !position) return;
+  floatingEls.root.style.left = `${position.x}px`;
+  floatingEls.root.style.top = `${position.y}px`;
+  floatingEls.root.style.right = "auto";
+  floatingEls.root.style.bottom = "auto";
+}
+
+function handleDragStart(event) {
+  if (!floatingEls || event.button !== 0) return;
+  if (event.target.closest("button, input, label, select, textarea, a")) return;
+
+  const rect = floatingEls.root.getBoundingClientRect();
+  dragState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    originX: rect.left,
+    originY: rect.top,
+    width: rect.width,
+    height: rect.height,
+    currentX: rect.left,
+    currentY: rect.top,
+    moved: false
+  };
+
+  floatingEls.root.setPointerCapture(event.pointerId);
+  window.addEventListener("pointermove", handleDragMove);
+  window.addEventListener("pointerup", handleDragEnd);
+  window.addEventListener("pointercancel", handleDragEnd);
+  event.preventDefault();
+}
+
+function handleDragMove(event) {
+  if (!dragState || event.pointerId !== dragState.pointerId) return;
+  const deltaX = event.clientX - dragState.startX;
+  const deltaY = event.clientY - dragState.startY;
+  if (!dragState.moved && Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD_PX) return;
+
+  dragState.moved = true;
+  const nextX = dragState.originX + deltaX;
+  const nextY = dragState.originY + deltaY;
+  const maxX = Math.max(0, window.innerWidth - dragState.width - FLOATING_POSITION_MARGIN);
+  const maxY = Math.max(0, window.innerHeight - dragState.height - FLOATING_POSITION_MARGIN);
+  const minX = Math.min(FLOATING_POSITION_MARGIN, maxX);
+  const minY = Math.min(FLOATING_POSITION_MARGIN, maxY);
+
+  const clampedX = clampValue(nextX, minX, maxX);
+  const clampedY = clampValue(nextY, minY, maxY);
+
+  dragState.currentX = clampedX;
+  dragState.currentY = clampedY;
+  setFloatingPosition({ x: clampedX, y: clampedY });
+}
+
+function handleDragEnd(event) {
+  if (!dragState || event.pointerId !== dragState.pointerId) return;
+  if (dragState.moved) {
+    persistFloatingPosition({ x: dragState.currentX, y: dragState.currentY });
+  }
+
+  try {
+    floatingEls?.root?.releasePointerCapture(event.pointerId);
+  } catch {
+    // Ignore release errors.
+  }
+
+  window.removeEventListener("pointermove", handleDragMove);
+  window.removeEventListener("pointerup", handleDragEnd);
+  window.removeEventListener("pointercancel", handleDragEnd);
+  dragState = null;
+}
+
+function persistFloatingPosition(position) {
+  if (!floatingPositionKey) return;
+  floatingPositionsCache = normalizePositionsMap(floatingPositionsCache);
+  floatingPositionsCache[floatingPositionKey] = position;
+  chrome.storage.local.set({ [FLOATING_POSITION_KEY]: floatingPositionsCache });
+}
+
+async function refreshFloatingState() {
+  const stored = await chrome.storage.local.get({
+    settings: UI_DEFAULT_SETTINGS,
+    status: null,
+    messages: [],
+    boundTabId: null,
+    boundTabInfo: null
+  });
+
+  floatingState = {
+    settings: { ...UI_DEFAULT_SETTINGS, ...stored.settings },
+    status: stored.status || null,
+    messages: Array.isArray(stored.messages) ? stored.messages : [],
+    boundTabId: stored.boundTabId ?? null,
+    boundTabInfo: stored.boundTabInfo ?? null
+  };
+
+  currentTabId = await getCurrentTabId();
+  renderFloatingUi();
+}
+
+function handleFloatingStorageChange(changes, area) {
+  if (area !== "local") return;
+
+  if (changes.settings) {
+    floatingState.settings = {
+      ...UI_DEFAULT_SETTINGS,
+      ...(changes.settings.newValue || {})
+    };
+  }
+
+  if (changes.status) {
+    floatingState.status = changes.status.newValue || null;
+  }
+
+  if (changes.messages) {
+    floatingState.messages = Array.isArray(changes.messages.newValue)
+      ? changes.messages.newValue
+      : [];
+  }
+
+  if (changes.boundTabId) {
+    floatingState.boundTabId = changes.boundTabId.newValue ?? null;
+  }
+
+  if (changes.boundTabInfo) {
+    floatingState.boundTabInfo = changes.boundTabInfo.newValue ?? null;
+  }
+
+  renderFloatingUi();
+}
+
+function renderFloatingUi() {
+  if (!floatingEls) return;
+  renderFloatingSettings();
+  renderFloatingStatus();
+  renderFloatingMessages();
+  renderFloatingBinding();
+}
+
+function renderFloatingSettings() {
+  const settings = floatingState.settings || UI_DEFAULT_SETTINGS;
+  if (document.activeElement !== floatingEls.portInput) {
+    floatingEls.portInput.value = settings.port ?? UI_DEFAULT_SETTINGS.port;
+  }
+  floatingEls.autoSendInput.checked = settings.autoSend !== false;
+  floatingEls.serverUrlEl.textContent = `http://${settings.host}:${settings.port}`;
+}
+
+function renderFloatingStatus() {
+  const status = floatingState.status;
+  if (!status) {
+    floatingEls.statusEl.textContent = "Waiting for first check...";
+    floatingEls.statusEl.classList.remove("is-error");
+    return;
+  }
+
+  if (status.lastError) {
+    const lastSuccess = status.lastSuccessAt
+      ? ` Last success: ${formatTime(status.lastSuccessAt)}.`
+      : "";
+    floatingEls.statusEl.textContent = `Connection failed: ${status.lastError}.${lastSuccess}`;
+    floatingEls.statusEl.classList.add("is-error");
+    return;
+  }
+
+  if (status.connected) {
+    const lastCheck = status.lastPollAt ? formatTime(status.lastPollAt) : "Just now";
+    floatingEls.statusEl.textContent = `Connected - Last check: ${lastCheck}`;
+    floatingEls.statusEl.classList.remove("is-error");
+    return;
+  }
+
+  if (status.lastPollAt) {
+    floatingEls.statusEl.textContent = `Last check: ${formatTime(status.lastPollAt)}`;
+    floatingEls.statusEl.classList.remove("is-error");
+    return;
+  }
+
+  floatingEls.statusEl.textContent = "Waiting for first check...";
+  floatingEls.statusEl.classList.remove("is-error");
+}
+
+function renderFloatingMessages() {
+  const list = Array.isArray(floatingState.messages) ? floatingState.messages : [];
+  floatingEls.messageCountEl.textContent = String(list.length);
+  floatingEls.messagesEl.textContent = "";
+  if (floatingEls.clearMessagesBtn) {
+    floatingEls.clearMessagesBtn.disabled = list.length === 0;
+  }
+
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "hc-empty";
+    empty.textContent = "No messages yet.";
+    floatingEls.messagesEl.appendChild(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  const ordered = [...list].slice(-MAX_FLOATING_MESSAGES).reverse();
+
+  for (const message of ordered) {
+    const card = document.createElement("div");
+    card.className = "hc-message";
+
+    const time = document.createElement("div");
+    time.className = "hc-message-time";
+    time.textContent = Number.isFinite(message.ts) ? formatTime(message.ts) : "Just now";
+
+    const text = document.createElement("div");
+    text.className = "hc-message-text";
+    text.textContent = formatMessageText(message);
+
+    card.append(time, text);
+    fragment.appendChild(card);
+  }
+
+  floatingEls.messagesEl.appendChild(fragment);
+}
+
+function renderFloatingBinding() {
+  const boundTabId = floatingState.boundTabId;
+  const boundTabInfo = floatingState.boundTabInfo;
+  const isBoundToCurrent = Number.isInteger(currentTabId) && boundTabId === currentTabId;
+
+  floatingEls.root.dataset.bound = isBoundToCurrent ? "true" : "false";
+  floatingEls.bindToggleBtn.setAttribute("aria-pressed", isBoundToCurrent ? "true" : "false");
+
+  let label = "No tab bound";
+  if (boundTabId != null) {
+    if (isBoundToCurrent) {
+      label = `Bound to: ${formatTabLabel({
+        id: currentTabId,
+        title: document.title,
+        url: window.location.href
+      })}`;
+    } else if (boundTabInfo && boundTabInfo.id === boundTabId) {
+      label = `Bound to: ${formatTabLabel(boundTabInfo)}`;
+    } else {
+      label = "Bound to another tab";
+    }
+  }
+
+  floatingEls.bindTextEl.textContent = label;
+  floatingEls.bindToggleBtn.title = isBoundToCurrent ? "Unbind this tab" : "Bind this tab";
+}
+
+function handlePortInputChange() {
+  const value = Number(floatingEls.portInput.value);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    floatingEls.portInput.classList.add("invalid");
+    return;
+  }
+
+  floatingEls.portInput.classList.remove("invalid");
+  scheduleSettingsSave({ ...floatingState.settings, port: value });
+}
+
+function handleAutoSendChange() {
+  scheduleSettingsSave({ ...floatingState.settings, autoSend: floatingEls.autoSendInput.checked });
+}
+
+function scheduleSettingsSave(nextSettings) {
+  floatingState.settings = nextSettings;
+  renderFloatingSettings();
+
+  if (floatingSaveTimer) clearTimeout(floatingSaveTimer);
+  floatingSaveTimer = setTimeout(async () => {
+    await chrome.storage.local.set({ settings: floatingState.settings });
+    try {
+      await chrome.runtime.sendMessage({ type: "POLL_NOW" });
+    } catch {
+      // Ignore background startup timing.
+    }
+  }, 300);
+}
+
+async function clearStoredMessages() {
+  floatingState.messages = [];
+  renderFloatingMessages();
+  try {
+    await chrome.storage.local.set({ messages: [] });
+  } catch (err) {
+    console.warn("Failed to clear messages", err);
+  }
+}
+
+async function toggleBinding() {
+  try {
+    await chrome.runtime.sendMessage({ type: "TOGGLE_BIND" });
+  } catch (err) {
+    console.warn("Failed to toggle bind", err);
+  }
+}
+
+async function getCurrentTabId() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "GET_TAB_CONTEXT" });
+    return Number.isInteger(response?.tabId) ? response.tabId : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatTabLabel(tab) {
+  const title = typeof tab.title === "string" ? tab.title.trim() : "";
+  const host = extractHostname(tab.url);
+  if (host && title) return `${host} | ${title}`;
+  if (host) return host;
+  if (title) return title;
+  if (tab.id != null) return `Tab ${tab.id}`;
+  return "Bound tab";
+}
+
+function extractHostname(url) {
+  if (!url || typeof url !== "string") return "";
+  try {
+    return new URL(url).hostname || "";
+  } catch {
+    return "";
+  }
+}
+
+function formatMessageText(message) {
+  if (!message) return "";
+  if (message.text) return String(message.text);
+  if (message.raw) {
+    return typeof message.raw === "string"
+      ? message.raw
+      : JSON.stringify(message.raw, null, 2);
+  }
+  return "";
+}
+
+function formatTime(timestamp) {
+  try {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  } catch {
+    return "Just now";
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initFloatingUi, { once: true });
+} else {
+  initFloatingUi();
+}

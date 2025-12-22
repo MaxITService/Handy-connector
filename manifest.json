@@ -24,7 +24,8 @@
   },
   "permissions": [
     "alarms",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",
@@ -35,26 +36,20 @@
       "matches": [
         "https://chat.openai.com/*",
         "https://chatgpt.com/*",
-        "https://claude.ai/*",
-        "https://copilot.microsoft.com/*",
-        "https://chat.deepseek.com/*",
-        "https://aistudio.google.com/*",
-        "https://grok.com/*",
-        "https://gemini.google.com/*",
         "https://www.perplexity.ai/*",
         "https://perplexity.ai/*"
       ],
+      "css": [
+        "per-website-button-clicking-mechanics/ocp_toast.css"
+      ],
       "js": [
         "log.js",
+        "per-website-button-clicking-mechanics/ocp_toast.js",
+        "per-website-button-clicking-mechanics/utils.js",
         "per-website-button-clicking-mechanics/buttons-clicking-shared.js",
         "per-website-button-clicking-mechanics/buttons-clicking-chatgpt.js",
-        "per-website-button-clicking-mechanics/buttons-clicking-copilot.js",
-        "per-website-button-clicking-mechanics/buttons-clicking-claude.js",
-        "per-website-button-clicking-mechanics/buttons-clicking-deepseek.js",
-        "per-website-button-clicking-mechanics/buttons-clicking-aistudio.js",
-        "per-website-button-clicking-mechanics/buttons-clicking-grok.js",
-        "per-website-button-clicking-mechanics/buttons-clicking-gemini.js",
-        "per-website-button-clicking-mechanics/buttons-clicking-perplexity.js"
+        "per-website-button-clicking-mechanics/buttons-clicking-perplexity.js",
+        "content-script.js"
       ]
     }
   ],
