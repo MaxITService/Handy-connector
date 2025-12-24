@@ -22,6 +22,7 @@ let currentBoundTabId = null;
 let currentBoundTabInfo = null;
 let saveTimer = null;
 let refreshInterval = null;
+const attachmentPreviewCache = new Map();
 
 init();
 
@@ -118,6 +119,7 @@ async function handleUnbindTab() {
 }
 
 async function handleClearMessages() {
+  clearAttachmentPreviewCache();
   try {
     await chrome.storage.local.set({ messages: [] });
   } catch (err) {
@@ -311,15 +313,209 @@ function renderMessages(messages) {
       ? formatTime(message.ts)
       : "Just now";
 
+    const statusLine = buildMessageStatusLine(message);
+    const statusEl = document.createElement("div");
+    statusEl.className = "message-status";
+    statusEl.textContent = statusLine || "";
+    if (!statusLine) {
+      statusEl.style.display = "none";
+    }
+    const errorSummary = summarizeAttachmentErrors(message.errors);
+    const deliveryDetail = message.deliveryDetail ? String(message.deliveryDetail) : "";
+    if (errorSummary || deliveryDetail) {
+      statusEl.title = [errorSummary, deliveryDetail].filter(Boolean).join(" | ");
+    }
+
     const text = document.createElement("div");
     text.className = "message-text";
     text.textContent = formatMessageText(message);
 
-    card.append(time, text);
+    const attachmentsEl = buildAttachmentList(message);
+    const actionsEl = buildMessageActions(message);
+
+    card.append(time, statusEl, text);
+    if (attachmentsEl) {
+      card.appendChild(attachmentsEl);
+    }
+    if (actionsEl) {
+      card.appendChild(actionsEl);
+    }
     fragment.appendChild(card);
   }
 
   messagesEl.appendChild(fragment);
+}
+
+function buildMessageStatusLine(message) {
+  if (!message) return "";
+  const parts = [];
+  if (message.status === "pending") {
+    parts.push("Attachments pending");
+  } else if (message.status === "error") {
+    parts.push("Attachments failed");
+  }
+
+  if (message.deliveryStatus) {
+    parts.push(`Delivery: ${humanizeStatusLabel(message.deliveryStatus)}`);
+  }
+
+  if (message.retryCount) {
+    parts.push(`Retries: ${message.retryCount}`);
+  }
+
+  return parts.join(" | ");
+}
+
+function humanizeStatusLabel(value) {
+  if (!value) return "";
+  return String(value).replace(/_/g, " ");
+}
+
+function buildAttachmentList(message) {
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  if (!attachments.length) return null;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "attachments";
+
+  const items = attachments.slice(0, 6);
+  for (const attachment of items) {
+    const chip = document.createElement("div");
+    chip.className = "attachment";
+
+    if (attachment.kind === "image") {
+      const img = document.createElement("img");
+      img.className = "attachment-thumb";
+      img.alt = attachment.filename || "image";
+      chip.appendChild(img);
+      requestAttachmentPreview(message.id, attachment, img);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "attachment-icon";
+      icon.textContent = "FILE";
+      const label = document.createElement("span");
+      label.className = "attachment-label";
+      label.textContent = formatAttachmentLabel(attachment);
+      chip.append(icon, label);
+    }
+
+    wrapper.appendChild(chip);
+  }
+
+  if (attachments.length > items.length) {
+    const more = document.createElement("div");
+    more.className = "attachment-more";
+    more.textContent = `+${attachments.length - items.length} more`;
+    wrapper.appendChild(more);
+  }
+
+  return wrapper;
+}
+
+function formatAttachmentLabel(attachment) {
+  const name = attachment?.filename ? String(attachment.filename) : "attachment";
+  if (Number.isFinite(Number(attachment?.size))) {
+    return `${name} (${formatBytes(attachment.size)})`;
+  }
+  return name;
+}
+
+function formatBytes(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size)) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function summarizeAttachmentErrors(errors) {
+  if (!Array.isArray(errors) || !errors.length) return "";
+  const first = errors[0];
+  const message = first?.message || first?.code || "failed";
+  return String(message).replace(/_/g, " ");
+}
+
+function buildMessageActions(message) {
+  if (!shouldShowRetry(message)) return null;
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+
+  const retryBtn = document.createElement("button");
+  retryBtn.type = "button";
+  retryBtn.className = "retry-btn";
+  retryBtn.textContent = "Retry";
+  retryBtn.addEventListener("click", () => {
+    void requestRetryMessage(message.id);
+  });
+
+  actions.appendChild(retryBtn);
+  return actions;
+}
+
+function shouldShowRetry(message) {
+  if (!message) return false;
+  if (message.status === "error") return true;
+  const retryable = new Set([
+    "send_not_found",
+    "editor_not_found",
+    "insert_failed",
+    "dropped_busy",
+    "send_failed",
+    "attachment_failed",
+    "bundle_error",
+    "bundle_failed",
+    "unbound"
+  ]);
+  return retryable.has(message.deliveryStatus);
+}
+
+async function requestRetryMessage(messageId) {
+  if (!messageId) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "RETRY_MESSAGE", id: messageId });
+  } catch (err) {
+    console.error("Failed to request retry", err);
+  }
+}
+
+async function requestAttachmentPreview(messageId, attachment, imgEl) {
+  if (!messageId || !attachment?.attId || !imgEl) return;
+  const key = `${messageId}:${attachment.attId}`;
+  const cachedUrl = attachmentPreviewCache.get(key);
+  if (cachedUrl) {
+    imgEl.src = cachedUrl;
+    return;
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_ATTACHMENT_DATA",
+      payload: { messageId, attId: attachment.attId }
+    });
+    if (!response?.ok || !response.payload?.bytes) return;
+    const mime = response.payload.meta?.mime || attachment.mime || "application/octet-stream";
+    const bytes = Array.isArray(response.payload.bytes)
+      ? new Uint8Array(response.payload.bytes)
+      : response.payload.bytes;
+    const blob = new Blob([bytes], { type: mime });
+    const url = URL.createObjectURL(blob);
+    attachmentPreviewCache.set(key, url);
+    imgEl.src = url;
+  } catch (err) {
+    console.warn("Failed to load attachment preview", err);
+  }
+}
+
+function clearAttachmentPreviewCache() {
+  for (const url of attachmentPreviewCache.values()) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // Ignore revoke errors.
+    }
+  }
+  attachmentPreviewCache.clear();
 }
 
 function formatMessageText(message) {

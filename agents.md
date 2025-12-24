@@ -6,6 +6,7 @@
 
 ## Security & Architecture Notes-
 - Minimize permissions; prefer `chrome.storage.local`; BUT: for this extension, if defaults don't work we can go ALL THE WAY IN, everythign can be allwed, if needed.
+- Update Codenotes file with minimal information about what file does, if new file is introduced or in a situation where functionality of file changes drastically
 
 
 ## Other:

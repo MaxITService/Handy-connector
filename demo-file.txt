@@ -1,0 +1,2 @@
+Handy Connector demo file.
+Hello from the test server.

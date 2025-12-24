@@ -177,6 +177,87 @@
         word-break: break-word;
       }
 
+      .message-status {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .attachments {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+      }
+
+      .attachment {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 6px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #fff;
+      }
+
+      .attachment-thumb {
+        width: 44px;
+        height: 44px;
+        object-fit: cover;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+      }
+
+      .attachment-icon {
+        font-size: 9px;
+        font-weight: 700;
+        color: var(--accent);
+        background: var(--accent-soft);
+        border-radius: 999px;
+        padding: 2px 6px;
+      }
+
+      .attachment-label {
+        font-size: 11px;
+        color: var(--muted);
+        max-width: 200px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .attachment-more {
+        font-size: 11px;
+        color: var(--muted);
+        align-self: center;
+      }
+
+      .message-actions {
+        margin-top: 6px;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .retry-btn {
+        background: #fff;
+        color: var(--error);
+        border: 1px solid rgba(180, 35, 24, 0.35);
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 140ms ease, transform 140ms ease;
+      }
+
+      .retry-btn:hover {
+        opacity: 0.9;
+      }
+
+      .retry-btn:active {
+        transform: scale(0.96);
+      }
+
       .empty {
         text-align: center;
         font-size: 12px;

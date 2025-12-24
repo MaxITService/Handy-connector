@@ -16,6 +16,9 @@ const MAX_FLOATING_MESSAGES = 8;
 const FLOATING_POSITION_KEY = "floatingUiPositions";
 const FLOATING_POSITION_MARGIN = 12;
 const DRAG_THRESHOLD_PX = 4;
+const ATTACHMENT_PREVIEW_LIMIT = 6;
+
+const attachmentPreviewCache = new Map();
 
 let floatingState = {
   settings: { ...UI_DEFAULT_SETTINGS },
@@ -38,35 +41,53 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 async function handleIncomingMessage(message) {
-  const text = normalizeIncomingText(message?.text);
-  if (!text || isStatusText(text)) return;
+  const payload = normalizeIncomingPayload(message);
+  const text = payload.text;
+  const hasAttachments = payload.attachments.length > 0;
+  if ((!text && !hasAttachments) || isStatusText(text)) return;
+
+  const site = window.InjectionTargetsOnWebsite?.activeSite || "Unknown";
+  if (payload.status === "error") {
+    notifyAttachmentBundleFailed(payload.errors);
+    reportStatus("bundle_failed", {
+      site,
+      detail: summarizeAttachmentErrors(payload.errors),
+      messageId: payload.id
+    });
+    return;
+  }
 
   if (messageInFlight) {
     notifyBusyDrop();
     reportStatus("dropped_busy", {
-      site: window.InjectionTargetsOnWebsite?.activeSite || "Unknown",
-      detail: "in_flight"
+      site,
+      detail: "in_flight",
+      messageId: payload.id
     });
     return;
   }
 
   messageInFlight = true;
   try {
-    const site = window.InjectionTargetsOnWebsite?.activeSite || "Unknown";
     if (!isSupportedSite(site)) {
-      reportStatus("unsupported_site", { site });
+      reportStatus("unsupported_site", { site, messageId: payload.id });
       return;
     }
 
     if (window.ButtonsClickingShared?.findStopButton?.()) {
       notifyBusyDrop();
-      reportStatus("dropped_busy", { site, detail: "stop_visible" });
+      reportStatus("dropped_busy", { site, detail: "stop_visible", messageId: payload.id });
       return;
     }
 
     const autoSend = await getAutoSendSetting();
-    const result = await dispatchToSite(site, text, autoSend);
-    handleResult(result, { site, autoSend });
+    const result = await dispatchToSite(site, payload, autoSend);
+    handleResult(result, {
+      site,
+      autoSend,
+      messageId: payload.id,
+      messagePreview: text
+    });
   } finally {
     messageInFlight = false;
   }
@@ -76,6 +97,78 @@ function normalizeIncomingText(value) {
   if (typeof value === "string") return value;
   if (value == null) return "";
   return String(value);
+}
+
+function normalizeIncomingPayload(message) {
+  const payload = message?.payload && typeof message.payload === "object" ? message.payload : message;
+  const text = normalizeIncomingText(payload?.text ?? payload?.message ?? payload?.body ?? payload?.content ?? "");
+  const raw = payload?.raw && typeof payload.raw === "object" ? payload.raw : null;
+  const attachments = normalizeIncomingAttachments(payload?.attachments);
+  const status = typeof payload?.status === "string" ? payload.status : "ok";
+  const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+  const id = payload?.id != null ? String(payload.id) : null;
+  const ts = Number.isFinite(Number(payload?.ts)) ? Number(payload.ts) : null;
+  if (id && attachments.length) {
+    hydrateAttachmentBlobUrls(id, attachments);
+  }
+  return { id, ts, text, raw, attachments, status, errors };
+}
+
+function normalizeIncomingAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((item, index) => normalizeIncomingAttachment(item, index)).filter(Boolean);
+}
+
+function normalizeIncomingAttachment(item, index) {
+  if (!item || typeof item !== "object") return null;
+  const bytes = extractAttachmentBytes(item.bytes);
+  const blobUrl = typeof item.blobUrl === "string" ? item.blobUrl : null;
+  const attId = item.attId != null ? String(item.attId) : `att-${index}`;
+  const filename = typeof item.filename === "string" ? item.filename : "attachment";
+  const mime = typeof item.mime === "string" ? item.mime : "";
+  const size = Number.isFinite(Number(item.size)) ? Number(item.size) : null;
+  const kind = item.kind === "image" ? "image" : "file";
+  const sha256 = typeof item.sha256 === "string" ? item.sha256 : null;
+
+  return {
+    attId,
+    filename,
+    mime,
+    size,
+    kind,
+    bytes,
+    blobUrl,
+    sha256
+  };
+}
+
+function extractAttachmentBytes(bytes) {
+  if (!bytes) return null;
+  if (bytes instanceof ArrayBuffer) return bytes;
+  if (ArrayBuffer.isView(bytes)) return bytes.buffer;
+  if (Array.isArray(bytes)) return new Uint8Array(bytes).buffer;
+  return null;
+}
+
+function hydrateAttachmentBlobUrls(messageId, attachments) {
+  for (const attachment of attachments) {
+    if (!attachment?.bytes || attachment.blobUrl || attachment.kind !== "image") continue;
+    const key = `${messageId}:${attachment.attId || attachment.filename}`;
+    const cachedUrl = attachmentPreviewCache.get(key);
+    if (cachedUrl) {
+      attachment.blobUrl = cachedUrl;
+      continue;
+    }
+    const mime = attachment.mime || "application/octet-stream";
+    try {
+      const blob = new Blob([attachment.bytes], { type: mime });
+      const url = URL.createObjectURL(blob);
+      attachmentPreviewCache.set(key, url);
+      attachment.blobUrl = url;
+    } catch {
+      // Ignore blob URL creation failures.
+    }
+  }
 }
 
 function isStatusText(text) {
@@ -93,12 +186,19 @@ async function getAutoSendSetting() {
   return settings?.autoSend !== false;
 }
 
-async function dispatchToSite(site, text, autoSend) {
+async function dispatchToSite(site, payload, autoSend) {
   if (site === "ChatGPT" && typeof window.processChatGPTIncomingMessage === "function") {
-    return await window.processChatGPTIncomingMessage(text, { autoSend });
+    return await window.processChatGPTIncomingMessage(payload, { autoSend });
   }
   if (site === "Perplexity" && typeof window.processPerplexityIncomingMessage === "function") {
-    return await window.processPerplexityIncomingMessage(text, { autoSend });
+    const result = await window.processPerplexityIncomingMessage(payload.text, { autoSend });
+    if (payload.attachments.length) {
+      return {
+        ...result,
+        attachments: { status: "unsupported", reason: "site_not_supported" }
+      };
+    }
+    return result;
   }
   return { status: "unsupported_site" };
 }
@@ -107,46 +207,69 @@ function handleResult(result, context) {
   const site = context.site || "Unknown";
   const status = result?.status || "unknown";
   const reason = result?.reason ? String(result.reason) : "";
+  const messageId = context.messageId || null;
+  if (result?.attachments) {
+    handleAttachmentResult(result.attachments, { site, messageId });
+  }
 
   if (status === "busy") {
     notifyBusyDrop();
-    reportStatus("dropped_busy", { site, detail: reason || "busy" });
+    reportStatus("dropped_busy", { site, detail: reason || "busy", messageId });
     return;
   }
 
   if (status === "editor_not_found") {
     notifyEditorMissing();
-    reportStatus("editor_not_found", { site });
+    reportStatus("editor_not_found", { site, messageId });
     return;
   }
 
   if (status === "send_not_found" || status === "send_disabled" || status === "validation_failed") {
     notifySendMissing();
-    reportStatus("send_not_found", { site, detail: reason || status });
+    reportStatus("send_not_found", { site, detail: reason || status, messageId });
     return;
   }
 
   if (status === "sent") {
-    reportStatus("sent", { site });
+    reportStatus("sent", { site, messageId, messagePreview: context.messagePreview });
     return;
   }
 
   if (status === "pasted") {
-    reportStatus("pasted", { site });
+    reportStatus("pasted", { site, messageId, messagePreview: context.messagePreview });
     return;
   }
 
   if (status === "insert_failed") {
-    reportStatus("insert_failed", { site });
+    reportStatus("insert_failed", { site, messageId });
     return;
   }
 
   if (status === "unsupported_site") {
-    reportStatus("unsupported_site", { site });
+    reportStatus("unsupported_site", { site, messageId });
     return;
   }
 
-  reportStatus("unknown", { site, detail: status });
+  reportStatus("unknown", { site, detail: status, messageId });
+}
+
+function handleAttachmentResult(attachmentResult, context) {
+  if (!attachmentResult || typeof attachmentResult !== "object") return;
+  const site = context.site || "Unknown";
+  const messageId = context.messageId || null;
+  const status = attachmentResult.status;
+  const reason = attachmentResult.reason ? String(attachmentResult.reason) : "";
+
+  if (status === "unsupported") {
+    notifyAttachmentUnsupported(site);
+    reportStatus("attachment_unsupported", { site, detail: reason || "unsupported", messageId });
+    return;
+  }
+
+  if (status === "failed") {
+    notifyAttachmentUploadFailed(reason);
+    reportStatus("attachment_failed", { site, detail: reason || "failed", messageId });
+  }
 }
 
 function reportStatus(status, payload = {}) {
@@ -176,6 +299,35 @@ function notifySendMissing() {
   if (typeof showToast === "function") {
     showToast("Send button not found.", "error");
   }
+}
+
+function notifyAttachmentUnsupported(site) {
+  if (typeof showToast === "function") {
+    const siteLabel = site && site !== "Unknown" ? ` on ${site}` : "";
+    showToast(`Attachments not supported${siteLabel}.`, "info");
+  }
+}
+
+function notifyAttachmentUploadFailed(reason) {
+  if (typeof showToast === "function") {
+    const detail = reason ? ` (${reason.replace(/_/g, " ")})` : "";
+    showToast(`Attachment upload failed${detail}.`, "error");
+  }
+}
+
+function notifyAttachmentBundleFailed(errors) {
+  if (typeof showToast === "function") {
+    const detail = summarizeAttachmentErrors(errors);
+    const suffix = detail ? ` (${detail})` : "";
+    showToast(`Attachment download failed${suffix}.`, "error");
+  }
+}
+
+function summarizeAttachmentErrors(errors) {
+  if (!Array.isArray(errors) || !errors.length) return "";
+  const first = errors[0];
+  const message = first?.message || first?.code || "failed";
+  return String(message).replace(/_/g, " ");
 }
 
 function initFloatingUi() {
@@ -501,6 +653,81 @@ function injectFloatingStyles() {
   color: var(--hc-text);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+#${FLOATING_UI_ID} .hc-message-status {
+  font-size: 10px;
+  color: var(--hc-muted);
+  margin-bottom: 4px;
+}
+
+#${FLOATING_UI_ID} .hc-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+#${FLOATING_UI_ID} .hc-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+#${FLOATING_UI_ID} .hc-attachment-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+#${FLOATING_UI_ID} .hc-attachment-icon {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--hc-accent);
+  background: var(--hc-accent-soft);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+#${FLOATING_UI_ID} .hc-attachment-label {
+  font-size: 10px;
+  color: var(--hc-muted);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#${FLOATING_UI_ID} .hc-attachment-more {
+  font-size: 10px;
+  color: var(--hc-muted);
+  align-self: center;
+}
+
+#${FLOATING_UI_ID} .hc-message-actions {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+#${FLOATING_UI_ID} .hc-retry-btn {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #b42318;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(180, 35, 24, 0.35);
+}
+
+#${FLOATING_UI_ID} .hc-retry-btn:hover {
+  opacity: 0.9;
 }
 
 #${FLOATING_UI_ID} .hc-empty {
@@ -860,15 +1087,202 @@ function renderFloatingMessages() {
     time.className = "hc-message-time";
     time.textContent = Number.isFinite(message.ts) ? formatTime(message.ts) : "Just now";
 
+    const statusLine = buildMessageStatusLine(message);
+    const statusEl = document.createElement("div");
+    statusEl.className = "hc-message-status";
+    statusEl.textContent = statusLine || "";
+    if (!statusLine) {
+      statusEl.style.display = "none";
+    }
+    const errorSummary = summarizeAttachmentErrors(message.errors);
+    const deliveryDetail = message.deliveryDetail ? String(message.deliveryDetail) : "";
+    if (errorSummary || deliveryDetail) {
+      statusEl.title = [errorSummary, deliveryDetail].filter(Boolean).join(" | ");
+    }
+
     const text = document.createElement("div");
     text.className = "hc-message-text";
     text.textContent = formatMessageText(message);
 
-    card.append(time, text);
+    const attachmentsEl = buildAttachmentList(message);
+    const actionsEl = buildMessageActions(message);
+
+    card.append(time, statusEl, text);
+    if (attachmentsEl) {
+      card.appendChild(attachmentsEl);
+    }
+    if (actionsEl) {
+      card.appendChild(actionsEl);
+    }
     fragment.appendChild(card);
   }
 
   floatingEls.messagesEl.appendChild(fragment);
+}
+
+function buildMessageStatusLine(message) {
+  if (!message) return "";
+  const parts = [];
+  if (message.status === "pending") {
+    parts.push("Attachments pending");
+  } else if (message.status === "error") {
+    parts.push("Attachments failed");
+  }
+
+  if (message.deliveryStatus) {
+    parts.push(`Delivery: ${humanizeStatusLabel(message.deliveryStatus)}`);
+  }
+
+  if (message.retryCount) {
+    parts.push(`Retries: ${message.retryCount}`);
+  }
+
+  return parts.join(" | ");
+}
+
+function humanizeStatusLabel(value) {
+  if (!value) return "";
+  return String(value).replace(/_/g, " ");
+}
+
+function buildAttachmentList(message) {
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  if (!attachments.length) return null;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "hc-attachments";
+
+  const items = attachments.slice(0, ATTACHMENT_PREVIEW_LIMIT);
+  for (const attachment of items) {
+    const chip = document.createElement("div");
+    chip.className = "hc-attachment";
+
+    if (attachment.kind === "image") {
+      const img = document.createElement("img");
+      img.className = "hc-attachment-thumb";
+      img.alt = attachment.filename || "image";
+      chip.appendChild(img);
+      requestAttachmentPreview(message.id, attachment, img);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "hc-attachment-icon";
+      icon.textContent = "FILE";
+      const label = document.createElement("span");
+      label.className = "hc-attachment-label";
+      label.textContent = formatAttachmentLabel(attachment);
+      chip.append(icon, label);
+    }
+
+    wrapper.appendChild(chip);
+  }
+
+  if (attachments.length > items.length) {
+    const more = document.createElement("div");
+    more.className = "hc-attachment-more";
+    more.textContent = `+${attachments.length - items.length} more`;
+    wrapper.appendChild(more);
+  }
+
+  return wrapper;
+}
+
+function formatAttachmentLabel(attachment) {
+  const name = attachment?.filename ? String(attachment.filename) : "attachment";
+  if (Number.isFinite(Number(attachment?.size))) {
+    return `${name} (${formatBytes(attachment.size)})`;
+  }
+  return name;
+}
+
+function formatBytes(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size)) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function buildMessageActions(message) {
+  if (!shouldShowRetry(message)) return null;
+  const actions = document.createElement("div");
+  actions.className = "hc-message-actions";
+
+  const retryBtn = document.createElement("button");
+  retryBtn.type = "button";
+  retryBtn.className = "hc-retry-btn";
+  retryBtn.textContent = "Retry";
+  retryBtn.addEventListener("click", () => {
+    void requestRetryMessage(message.id);
+  });
+
+  actions.appendChild(retryBtn);
+  return actions;
+}
+
+function shouldShowRetry(message) {
+  if (!message) return false;
+  if (message.status === "error") return true;
+  const retryable = new Set([
+    "send_not_found",
+    "editor_not_found",
+    "insert_failed",
+    "dropped_busy",
+    "send_failed",
+    "attachment_failed",
+    "bundle_error",
+    "bundle_failed",
+    "unbound"
+  ]);
+  return retryable.has(message.deliveryStatus);
+}
+
+async function requestRetryMessage(messageId) {
+  if (!messageId) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "RETRY_MESSAGE", id: messageId });
+  } catch (err) {
+    console.warn("Failed to request retry", err);
+  }
+}
+
+async function requestAttachmentPreview(messageId, attachment, imgEl) {
+  if (!messageId || !attachment?.attId || !imgEl) return;
+  const key = `${messageId}:${attachment.attId}`;
+  const cachedUrl = attachmentPreviewCache.get(key);
+  if (cachedUrl) {
+    imgEl.src = cachedUrl;
+    return;
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_ATTACHMENT_DATA",
+      payload: { messageId, attId: attachment.attId }
+    });
+    if (!response?.ok || !response.payload?.bytes) return;
+    const mime = response.payload.meta?.mime || attachment.mime || "application/octet-stream";
+    const bytes = Array.isArray(response.payload.bytes)
+      ? new Uint8Array(response.payload.bytes)
+      : response.payload.bytes;
+    const blob = new Blob([bytes], { type: mime });
+    const url = URL.createObjectURL(blob);
+    attachmentPreviewCache.set(key, url);
+    imgEl.src = url;
+  } catch (err) {
+    console.warn("Failed to load attachment preview", err);
+  }
+}
+
+function clearAttachmentPreviewCache() {
+  for (const url of attachmentPreviewCache.values()) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // Ignore revoke errors.
+    }
+  }
+  attachmentPreviewCache.clear();
 }
 
 function renderFloatingBinding() {
@@ -931,6 +1345,7 @@ function scheduleSettingsSave(nextSettings) {
 async function clearStoredMessages() {
   floatingState.messages = [];
   renderFloatingMessages();
+  clearAttachmentPreviewCache();
   try {
     await chrome.storage.local.set({ messages: [] });
   } catch (err) {
