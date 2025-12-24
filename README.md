@@ -7,8 +7,9 @@ A Chrome extension that bridges external applications with AI chat interfaces (C
 - **Text Messages**: Send text from external apps directly into ChatGPT or Perplexity
 - **File Attachments**: Upload images and files programmatically (ChatGPT only)
 - **Auto-Send**: Optionally auto-submit messages after pasting
+- **Auto-Open Tab**: Server can specify which AI chat to open automatically
 - **Connection Status**: Real-time keepalive monitoring
-- **Message History**: View recent messages in the popup with retry support
+- **Message History**: View recent messages with binding status (Bound/Unbound indicator)
 
 ## How It Works
 
@@ -60,16 +61,30 @@ See [`messaging-contract.md`](messaging-contract.md) for the full HTTP protocol 
 | POST | `/messages` | Receive status reports |
 | GET | `/blob/<attId>` | Download attachment files |
 
-### Message Types
+### Response Format with Auto-Open
+
+The server can include a `config` object to control extension behavior:
 
 ```json
 {
-  "id": "unique_id",
-  "ts": 1735084000123,
-  "type": "text",
-  "text": "Hello ChatGPT!"
+  "cursor": 1735084000123,
+  "messages": [
+    {
+      "id": "unique_id",
+      "ts": 1735084000123,
+      "type": "text",
+      "text": "Hello ChatGPT!"
+    }
+  ],
+  "config": {
+    "autoOpenTabUrl": "https://chatgpt.com/"
+  }
 }
 ```
+
+When `autoOpenTabUrl` is provided and no tab is bound, the extension automatically opens a new tab with the specified URL and binds to it.
+
+### Message Types
 
 For file attachments, use `type: "bundle"` with an `attachments` array.
 
