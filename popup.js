@@ -309,9 +309,11 @@ function renderMessages(messages) {
 
     const time = document.createElement("div");
     time.className = "message-time";
-    time.textContent = Number.isFinite(message.ts)
+    const timeText = Number.isFinite(message.ts)
       ? formatTime(message.ts)
       : "Just now";
+    const boundLabel = message.wasBound === true ? "Bound" : message.wasBound === false ? "Unbound" : "";
+    time.textContent = boundLabel ? `${timeText} · ${boundLabel}` : timeText;
 
     const statusLine = buildMessageStatusLine(message);
     const statusEl = document.createElement("div");

@@ -15,41 +15,45 @@ function parseMaybeJson(text) {
 function parseMessageResponse(parsed, rawText) {
   if (parsed == null) {
     if (rawText && rawText.trim()) {
-      return { messages: [rawText.trim()], cursor: null };
+      return { messages: [rawText.trim()], cursor: null, config: null };
     }
-    return { messages: [], cursor: null };
+    return { messages: [], cursor: null, config: null };
   }
 
   if (Array.isArray(parsed)) {
-    return { messages: parsed, cursor: null };
+    return { messages: parsed, cursor: null, config: null };
   }
 
   if (typeof parsed === "object") {
+    const config = parsed.config ?? null;
     if (Array.isArray(parsed.messages)) {
       return {
         messages: parsed.messages,
-        cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null
+        cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null,
+        config
       };
     }
 
     if ("message" in parsed || "text" in parsed || "body" in parsed || "content" in parsed) {
       return {
         messages: [parsed],
-        cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null
+        cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null,
+        config
       };
     }
 
     return {
       messages: [parsed],
-      cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null
+      cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null,
+      config
     };
   }
 
   if (typeof parsed === "string") {
-    return { messages: [parsed], cursor: null };
+    return { messages: [parsed], cursor: null, config: null };
   }
 
-  return { messages: [], cursor: null };
+  return { messages: [], cursor: null, config: null };
 }
 
 function normalizeIncomingMessages(messages) {

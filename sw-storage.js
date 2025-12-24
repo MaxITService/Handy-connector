@@ -129,7 +129,8 @@ function buildStoredMessage(message, overrides = {}) {
     deliveryDetail: overrides.deliveryDetail ?? message.deliveryDetail ?? null,
     deliveryUpdatedAt: overrides.deliveryUpdatedAt ?? message.deliveryUpdatedAt ?? null,
     retryCount: overrides.retryCount ?? message.retryCount ?? 0,
-    createdAt: overrides.createdAt ?? message.createdAt ?? Date.now()
+    createdAt: overrides.createdAt ?? message.createdAt ?? Date.now(),
+    wasBound: overrides.wasBound ?? message.wasBound ?? null
   };
 }
 

@@ -48,6 +48,8 @@ async function pollOnce() {
     // Extract server config for auto-open functionality
     const serverConfig = parsedResponse.config || null;
 
+    const wasBound = !!stored.boundTabId;
+
     for (const msg of regularMessages) {
       if (isDuplicateMessage(msg, dedupeSet, pendingBundles)) continue;
 
@@ -55,12 +57,13 @@ async function pollOnce() {
         pendingBundles[msg.id] = ensurePendingBundle(msg, pendingBundles[msg.id]);
         messageList = upsertMessageList(messageList, buildStoredMessage(msg, {
           status: "pending",
-          errors: []
+          errors: [],
+          wasBound
         }));
         continue;
       }
 
-      const storedMessage = buildStoredMessage(msg, { status: "ok", errors: [] });
+      const storedMessage = buildStoredMessage(msg, { status: "ok", errors: [], wasBound });
       const delivery = await deliverToBoundTab(stored.boundTabId, buildForwardPayload(msg, [], "ok"), serverConfig);
       messageList = applyDeliveryStatus(messageList, msg.id, delivery);
       messageList = upsertMessageList(messageList, storedMessage);
@@ -123,6 +126,8 @@ async function processPendingBundles(pendingBundles, settings, boundTabId, messa
     return { pendingBundles, messageList, dedupeSet };
   }
 
+  const wasBound = !!boundTabId;
+
   for (const id of pendingIds) {
     const entry = pendingBundles[id];
     if (!shouldAttemptBundle(entry)) continue;
@@ -150,7 +155,8 @@ async function processPendingBundles(pendingBundles, settings, boundTabId, messa
       messageList = applyDeliveryStatus(messageList, entry.id, delivery);
       messageList = upsertMessageList(messageList, buildStoredMessage(entry, {
         status: "ok",
-        errors: []
+        errors: [],
+        wasBound
       }));
       dedupeSet.add(entry.id);
       delete pendingBundles[id];
@@ -162,7 +168,8 @@ async function processPendingBundles(pendingBundles, settings, boundTabId, messa
       pendingBundles[id] = updatedEntry;
       messageList = upsertMessageList(messageList, buildStoredMessage(entry, {
         status: "pending",
-        errors: result.errors
+        errors: result.errors,
+        wasBound
       }));
       continue;
     }
@@ -176,7 +183,8 @@ async function processPendingBundles(pendingBundles, settings, boundTabId, messa
     });
     messageList = upsertMessageList(messageList, buildStoredMessage(entry, {
       status: "error",
-      errors: result.errors
+      errors: result.errors,
+      wasBound
     }));
     dedupeSet.add(entry.id);
     delete pendingBundles[id];
