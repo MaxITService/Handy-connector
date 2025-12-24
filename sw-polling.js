@@ -45,6 +45,9 @@ async function pollOnce() {
       void sendAck(settings);
     }
 
+    // Extract server config for auto-open functionality
+    const serverConfig = parsedResponse.config || null;
+
     for (const msg of regularMessages) {
       if (isDuplicateMessage(msg, dedupeSet, pendingBundles)) continue;
 
@@ -58,7 +61,7 @@ async function pollOnce() {
       }
 
       const storedMessage = buildStoredMessage(msg, { status: "ok", errors: [] });
-      const delivery = await deliverToBoundTab(stored.boundTabId, buildForwardPayload(msg, [], "ok"));
+      const delivery = await deliverToBoundTab(stored.boundTabId, buildForwardPayload(msg, [], "ok"), serverConfig);
       messageList = applyDeliveryStatus(messageList, msg.id, delivery);
       messageList = upsertMessageList(messageList, storedMessage);
       dedupeSet.add(msg.id);
@@ -69,7 +72,8 @@ async function pollOnce() {
       settings,
       stored.boundTabId,
       messageList,
-      dedupeSet
+      dedupeSet,
+      serverConfig
     );
     pendingBundles = bundleOutcome.pendingBundles;
     messageList = bundleOutcome.messageList;
@@ -113,7 +117,7 @@ async function pollOnce() {
   }
 }
 
-async function processPendingBundles(pendingBundles, settings, boundTabId, messageList, dedupeSet) {
+async function processPendingBundles(pendingBundles, settings, boundTabId, messageList, dedupeSet, serverConfig = null) {
   const pendingIds = Object.keys(pendingBundles);
   if (!pendingIds.length) {
     return { pendingBundles, messageList, dedupeSet };
@@ -142,7 +146,7 @@ async function processPendingBundles(pendingBundles, settings, boundTabId, messa
         sha256: attachment.sha256
       }));
       const payload = buildForwardPayload(entry, payloadAttachments, "ok");
-      const delivery = await deliverToBoundTab(boundTabId, payload);
+      const delivery = await deliverToBoundTab(boundTabId, payload, serverConfig);
       messageList = applyDeliveryStatus(messageList, entry.id, delivery);
       messageList = upsertMessageList(messageList, buildStoredMessage(entry, {
         status: "ok",
@@ -165,7 +169,7 @@ async function processPendingBundles(pendingBundles, settings, boundTabId, messa
 
     console.warn("[handy-connector] Bundle failed", entry.id, result.errors);
     const payload = buildForwardPayload(entry, [], "error", result.errors);
-    const delivery = await deliverToBoundTab(boundTabId, payload);
+    const delivery = await deliverToBoundTab(boundTabId, payload, serverConfig);
     messageList = applyDeliveryStatus(messageList, entry.id, {
       ...delivery,
       overrideStatus: "bundle_error"
@@ -188,7 +192,29 @@ function isDuplicateMessage(message, dedupeSet, pendingBundles) {
   return false;
 }
 
-async function deliverToBoundTab(boundTabId, payload) {
+async function deliverToBoundTab(boundTabId, payload, serverConfig = null) {
+  // If no bound tab but server provided autoOpenTabUrl, create a new tab
+  if (!boundTabId && serverConfig?.autoOpenTabUrl) {
+    try {
+      console.log("[handy-connector] No bound tab, auto-opening:", serverConfig.autoOpenTabUrl);
+      const newTab = await chrome.tabs.create({
+        url: serverConfig.autoOpenTabUrl,
+        active: true
+      });
+      
+      // Wait for tab to load before binding
+      await waitForTabLoad(newTab.id);
+      
+      // Bind to the new tab
+      await bindTabById(newTab.id);
+      boundTabId = newTab.id;
+      console.log("[handy-connector] Auto-bound to new tab:", newTab.id);
+    } catch (err) {
+      console.warn("[handy-connector] Failed to auto-open tab:", err);
+      return { ok: false, reason: "auto_open_failed", error: err?.message || String(err) };
+    }
+  }
+  
   if (!boundTabId) {
     return { ok: false, reason: "unbound", detail: "No bound tab" };
   }
@@ -203,6 +229,39 @@ async function deliverToBoundTab(boundTabId, payload) {
     console.warn("[handy-connector] Failed to send message to tab", boundTabId, err);
     return { ok: false, reason: "send_failed", error: err?.message || String(err) };
   }
+}
+
+/**
+ * Wait for a tab to finish loading
+ * @param {number} tabId - The tab ID to wait for
+ * @param {number} timeoutMs - Maximum time to wait (default 10 seconds)
+ * @returns {Promise<void>}
+ */
+async function waitForTabLoad(tabId, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    
+    const checkTab = async () => {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.status === "complete") {
+          resolve();
+          return;
+        }
+        
+        if (Date.now() - startTime > timeoutMs) {
+          resolve(); // Resolve anyway after timeout
+          return;
+        }
+        
+        setTimeout(checkTab, 200);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    
+    checkTab();
+  });
 }
 
 function buildForwardPayload(message, attachments, status, errors = []) {

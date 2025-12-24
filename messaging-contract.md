@@ -44,9 +44,26 @@ Cache-Control: no-store
       "text": "Hello ChatGPT!",
       "ts": 1735084000123
     }
-  ]
+  ],
+  "config": {
+    "autoOpenTabUrl": "https://chatgpt.com"
+  }
 }
 ```
+
+### Config Object
+
+The `config` object provides server-controlled behavior settings.
+
+| Field            | Type             | Description                                                    |
+| :--------------- | :--------------- | :------------------------------------------------------------- |
+| `autoOpenTabUrl` | `string \| null` | URL to auto-open if no tab is bound. `null` or empty = disabled |
+
+When `autoOpenTabUrl` is provided and the extension has no bound tab, it will:
+1. Create a new browser tab with the specified URL
+2. Wait for the tab to finish loading
+3. Automatically bind to the new tab
+4. Deliver the message to the newly created tab
 
 ### Message Objects
 
