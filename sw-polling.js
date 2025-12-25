@@ -28,11 +28,17 @@ async function pollOnce() {
 
     if (!response.ok) {
       if (response.status === 401) {
+        // Show red badge on extension icon for auth failure
+        chrome.action.setBadgeText({ text: "!" });
+        chrome.action.setBadgeBackgroundColor({ color: "#b42318" });
         throw new Error("Authentication failed. Check that your password matches the Handy app.");
       }
       const bodyText = await response.text();
       throw new Error(`HTTP ${response.status}: ${bodyText || "No response body"}`);
     }
+
+    // Clear badge on successful connection
+    chrome.action.setBadgeText({ text: "" });
 
     const bodyText = await response.text();
     const parsed = parseMaybeJson(bodyText);
