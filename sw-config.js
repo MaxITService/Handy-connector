@@ -10,6 +10,8 @@ const DEFAULT_SETTINGS = {
   maxStoredMessages: 5
 };
 
+const DEFAULT_PASSWORD = "fklejqwhfiu342lhk3";
+
 const STATUS_DEFAULT = {
   lastPollAt: null,
   lastSuccessAt: null,

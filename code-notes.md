@@ -13,6 +13,16 @@
 - Status reports are POSTed to `/messages` with type `status` and prefix `[hc-status]` to avoid loops.
 - No selector auto-detection or button injection container logic is used.
 
+## Password Authentication
+
+- The Handy desktop app requires Bearer token authentication on its localhost server.
+- Default password: `fklejqwhfiu342lhk3` (defined in `sw-config.js` and `popup.js`).
+- Password is stored in `chrome.storage.sync` under key `connectorPassword` to sync across Chrome instances.
+- All fetch requests to the Handy server include `Authorization: Bearer {password}` header.
+- If server returns 401 Unauthorized, a user-friendly error is shown: "Authentication failed. Check that your password matches the Handy app."
+- Popup includes a password input field with show/hide toggle (eye icon).
+- Password auto-saves on change with debounce (500ms delay).
+
 ## Popup
 
 - Bind to tab, connection status, keepalive indicator, Auto-send toggle, port setting.

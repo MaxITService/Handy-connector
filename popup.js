@@ -5,6 +5,8 @@ const DEFAULT_SETTINGS = {
   autoSend: true
 };
 
+const DEFAULT_PASSWORD = "fklejqwhfiu342lhk3";
+
 const portInput = document.getElementById("port");
 const autoSendInput = document.getElementById("auto-send");
 const serverUrlEl = document.getElementById("server-url");
@@ -16,11 +18,21 @@ const unbindTabBtn = document.getElementById("unbind-tab");
 const boundStatusEl = document.getElementById("bound-status");
 const keepaliveIndicatorEl = document.getElementById("keepalive-indicator");
 const clearMessagesBtn = document.getElementById("clear-messages");
+const passwordInput = document.getElementById("password");
+const passwordToggleBtn = document.getElementById("password-toggle");
+const passwordSavedEl = document.getElementById("password-saved");
+const eyeIcon = document.getElementById("eye-icon");
+const eyeOffIcon = document.getElementById("eye-off-icon");
+const statusBannerEl = document.getElementById("status-banner");
+const statusBannerTitleEl = document.getElementById("status-banner-title");
+const statusBannerHintEl = document.getElementById("status-banner-hint");
+const statusBannerIconEl = statusBannerEl?.querySelector(".status-banner-icon");
 
 let currentSettings = { ...DEFAULT_SETTINGS };
 let currentBoundTabId = null;
 let currentBoundTabInfo = null;
 let saveTimer = null;
+let passwordSaveTimer = null;
 let refreshInterval = null;
 const attachmentPreviewCache = new Map();
 
@@ -28,6 +40,7 @@ init();
 
 async function init() {
   await loadState();
+  await loadPassword();
   chrome.storage.onChanged.addListener(handleStorageChange);
   portInput.addEventListener("input", handlePortInput);
   autoSendInput.addEventListener("change", handleAutoSendChange);
@@ -38,10 +51,71 @@ async function init() {
   if (unbindTabBtn) {
     unbindTabBtn.addEventListener("click", handleUnbindTab);
   }
+  if (passwordInput) {
+    passwordInput.addEventListener("input", handlePasswordInput);
+  }
+  if (passwordToggleBtn) {
+    passwordToggleBtn.addEventListener("click", handlePasswordToggle);
+  }
 
   refreshInterval = setInterval(updateTimedUI, 1000);
 
   void requestConnect();
+}
+
+async function loadPassword() {
+  try {
+    const { connectorPassword } = await chrome.storage.sync.get({ connectorPassword: DEFAULT_PASSWORD });
+    if (passwordInput) {
+      passwordInput.value = connectorPassword || DEFAULT_PASSWORD;
+    }
+  } catch (err) {
+    console.warn("Failed to load password", err);
+    if (passwordInput) {
+      passwordInput.value = DEFAULT_PASSWORD;
+    }
+  }
+}
+
+function handlePasswordInput() {
+  if (passwordSaveTimer) clearTimeout(passwordSaveTimer);
+  passwordSaveTimer = setTimeout(async () => {
+    const password = passwordInput.value || DEFAULT_PASSWORD;
+    try {
+      await chrome.storage.sync.set({ connectorPassword: password });
+      showPasswordSaved();
+      // Trigger a reconnect with new password
+      try {
+        await chrome.runtime.sendMessage({ type: "POLL_NOW" });
+      } catch {
+        // Ignore background startup timing.
+      }
+    } catch (err) {
+      console.error("Failed to save password", err);
+    }
+  }, 500);
+}
+
+function showPasswordSaved() {
+  if (!passwordSavedEl) return;
+  passwordSavedEl.classList.add("visible");
+  setTimeout(() => {
+    passwordSavedEl.classList.remove("visible");
+  }, 2000);
+}
+
+function handlePasswordToggle() {
+  if (!passwordInput || !eyeIcon || !eyeOffIcon) return;
+  
+  if (passwordInput.type === "password") {
+    passwordInput.type = "text";
+    eyeIcon.style.display = "none";
+    eyeOffIcon.style.display = "block";
+  } else {
+    passwordInput.type = "password";
+    eyeIcon.style.display = "block";
+    eyeOffIcon.style.display = "none";
+  }
 }
 
 async function loadState() {
@@ -67,10 +141,14 @@ async function loadState() {
   renderMessages(messages);
   await renderBoundStatus(currentBoundTabId, currentBoundTabInfo);
   updateKeepaliveIndicator(status.lastKeepaliveAt);
+  updateStatusBanner(status, currentBoundTabId);
 }
 
 function handleStorageChange(changes, area) {
   if (area !== "local") return;
+
+  let statusChanged = false;
+  let boundChanged = false;
 
   if (changes.settings) {
     currentSettings = { ...DEFAULT_SETTINGS, ...changes.settings.newValue };
@@ -80,6 +158,7 @@ function handleStorageChange(changes, area) {
   if (changes.status) {
     renderStatus(changes.status.newValue);
     updateKeepaliveIndicator(changes.status.newValue?.lastKeepaliveAt);
+    statusChanged = true;
   }
 
   if (changes.messages) {
@@ -88,14 +167,22 @@ function handleStorageChange(changes, area) {
 
   if (changes.boundTabId) {
     currentBoundTabId = changes.boundTabId.newValue ?? null;
+    boundChanged = true;
   }
 
   if (changes.boundTabInfo) {
     currentBoundTabInfo = changes.boundTabInfo.newValue ?? null;
+    boundChanged = true;
   }
 
-  if (changes.boundTabId || changes.boundTabInfo) {
+  if (boundChanged) {
     renderBoundStatus(currentBoundTabId, currentBoundTabInfo);
+  }
+
+  if (statusChanged || boundChanged) {
+    chrome.storage.local.get("status").then(({ status }) => {
+      updateStatusBanner(status, currentBoundTabId);
+    });
   }
 }
 
@@ -276,6 +363,66 @@ function renderStatus(status) {
 
   statusEl.textContent = "Waiting for first check...";
   statusEl.classList.remove("error");
+}
+
+/**
+ * Updates the prominent status banner based on connection and binding state
+ */
+function updateStatusBanner(status, boundTabId) {
+  if (!statusBannerEl) return;
+
+  const isConnected = status?.connected && !status?.lastError;
+  const isBound = boundTabId != null;
+
+  // SVG icons for different states
+  const disconnectedIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="10"></circle>
+    <line x1="12" y1="8" x2="12" y2="12"></line>
+    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+  </svg>`;
+
+  const warningIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+    <line x1="12" y1="9" x2="12" y2="13"></line>
+    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+  </svg>`;
+
+  const readyIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+    <polyline points="22 4 12 14.01 9 11.01"></polyline>
+  </svg>`;
+
+  statusBannerEl.classList.remove("disconnected", "connected-unbound", "ready");
+
+  if (!isConnected) {
+    // Disconnected state
+    statusBannerEl.classList.add("disconnected");
+    if (statusBannerIconEl) statusBannerIconEl.innerHTML = disconnectedIcon;
+    if (statusBannerTitleEl) statusBannerTitleEl.textContent = "Disconnected";
+    if (statusBannerHintEl) {
+      if (status?.lastError?.includes("Authentication")) {
+        statusBannerHintEl.textContent = "Check your connection password matches the Handy app.";
+      } else {
+        statusBannerHintEl.textContent = "Make sure Handy app is running on your computer.";
+      }
+    }
+  } else if (!isBound) {
+    // Connected but no tab bound
+    statusBannerEl.classList.add("connected-unbound");
+    if (statusBannerIconEl) statusBannerIconEl.innerHTML = warningIcon;
+    if (statusBannerTitleEl) statusBannerTitleEl.textContent = "Connected - No Tab Bound";
+    if (statusBannerHintEl) {
+      statusBannerHintEl.textContent = "Bind a tab manually, or Handy may auto-open one if configured.";
+    }
+  } else {
+    // Fully ready
+    statusBannerEl.classList.add("ready");
+    if (statusBannerIconEl) statusBannerIconEl.innerHTML = readyIcon;
+    if (statusBannerTitleEl) statusBannerTitleEl.textContent = "Ready";
+    if (statusBannerHintEl) {
+      statusBannerHintEl.textContent = "Messages from Handy will be sent to the bound tab automatically.";
+    }
+  }
 }
 
 async function requestConnect() {

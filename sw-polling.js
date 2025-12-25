@@ -27,6 +27,9 @@ async function pollOnce() {
     const response = await fetchWithTimeout(buildRequestUrl(settings, stored.cursor), timeoutMs);
 
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error("Authentication failed. Check that your password matches the Handy app.");
+      }
       const bodyText = await response.text();
       throw new Error(`HTTP ${response.status}: ${bodyText || "No response body"}`);
     }

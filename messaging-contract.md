@@ -14,6 +14,17 @@ The extension continuously polls a local HTTP server (default `http://127.0.0.1:
 - **Protocol**: HTTP/1.1 (Keep-Alive recommended but not required)
 - **Polling Interval**: ~100ms - 1s (adaptive)
 
+### Authentication
+
+The extension uses Bearer token authentication on all requests to prevent unauthorized access from malicious webpages.
+
+- **Header**: `Authorization: Bearer {password}`
+- **Default Password**: `fklejqwhfiu342lhk3`
+- **Storage**: Password is stored in `chrome.storage.sync` (syncs across user's Chrome instances)
+- **Configuration**: Users can change the password in the extension popup
+
+**All requests** to the server (GET, POST) include this header. The server should validate the token and return `401 Unauthorized` if invalid.
+
 ---
 
 ## 1. Polling for Messages (GET)
@@ -25,6 +36,7 @@ The extension issues a `GET` request to retrieve new messages.
 ```http
 GET /messages?since=<last_cursor> HTTP/1.1
 Host: 127.0.0.1:63155
+Authorization: Bearer fklejqwhfiu342lhk3
 Cache-Control: no-store
 ```
 
@@ -145,6 +157,7 @@ The extension reports execution status back to the server using `POST`.
 
 ```http
 POST /messages HTTP/1.1
+Authorization: Bearer fklejqwhfiu342lhk3
 Content-Type: application/json
 
 {

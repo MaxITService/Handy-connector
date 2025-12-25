@@ -16,6 +16,10 @@
         --accent: #187c6b;
         --accent-soft: #d7efe8;
         --error: #b42318;
+        --warning: #b45309;
+        --warning-soft: #fef3c7;
+        --success: #059669;
+        --success-soft: #d1fae5;
         --shadow: 0 12px 26px rgba(55, 42, 24, 0.1);
       }
 
@@ -79,7 +83,9 @@
         margin-bottom: 6px;
       }
 
-      input[type="number"] {
+      input[type="number"],
+      input[type="password"],
+      input[type="text"].password-input {
         width: 100%;
         padding: 8px 10px;
         border-radius: 10px;
@@ -89,15 +95,63 @@
         transition: border 140ms ease, box-shadow 140ms ease;
       }
 
-      input[type="number"]:focus {
+      input[type="number"]:focus,
+      input[type="password"]:focus,
+      input[type="text"].password-input:focus {
         outline: none;
         border-color: var(--accent);
         box-shadow: 0 0 0 2px rgba(24, 124, 107, 0.2);
       }
 
-      input[type="number"].invalid {
+      input[type="number"].invalid,
+      input[type="password"].invalid,
+      input[type="text"].password-input.invalid {
         border-color: var(--error);
         box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.2);
+      }
+
+      .password-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+      }
+
+      .password-wrapper input {
+        padding-right: 36px;
+      }
+
+      .password-toggle {
+        position: absolute;
+        right: 8px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 4px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .password-toggle:hover {
+        color: var(--text);
+      }
+
+      .password-toggle svg {
+        width: 18px;
+        height: 18px;
+      }
+
+      .password-saved {
+        font-size: 11px;
+        color: var(--accent);
+        margin-left: 8px;
+        opacity: 0;
+        transition: opacity 200ms ease;
+      }
+
+      .password-saved.visible {
+        opacity: 1;
       }
 
       .server {
@@ -278,6 +332,69 @@
         box-shadow: 0 0 8px rgba(46, 204, 113, 0.6);
       }
 
+      /* Connection status banner */
+      .status-banner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        font-size: 12px;
+        font-weight: 600;
+        transition: all 200ms ease;
+      }
+
+      .status-banner.disconnected {
+        background: rgba(180, 35, 24, 0.1);
+        border: 1px solid rgba(180, 35, 24, 0.3);
+        color: var(--error);
+      }
+
+      .status-banner.connected-unbound {
+        background: var(--warning-soft);
+        border: 1px solid rgba(180, 83, 9, 0.3);
+        color: var(--warning);
+      }
+
+      .status-banner.ready {
+        background: var(--success-soft);
+        border: 1px solid rgba(5, 150, 105, 0.3);
+        color: var(--success);
+      }
+
+      .status-banner-icon {
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+      }
+
+      .status-banner-text {
+        flex: 1;
+      }
+
+      .status-banner-hint {
+        font-size: 11px;
+        font-weight: 400;
+        opacity: 0.85;
+        margin-top: 2px;
+      }
+
+      /* Help text styles */
+      .help-text {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.4;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.03);
+        border-radius: 8px;
+        margin-top: 8px;
+      }
+
+      .help-text strong {
+        color: var(--text);
+      }
+
       .btn-primary {
         background: var(--accent);
         color: #fff;
@@ -396,6 +513,19 @@
       <span class="badge" id="message-count">0</span>
     </header>
 
+    <!-- Status Banner -->
+    <div id="status-banner" class="status-banner disconnected">
+      <svg class="status-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <div class="status-banner-text">
+        <div id="status-banner-title">Disconnected</div>
+        <div id="status-banner-hint" class="status-banner-hint">Waiting for connection to Handy app...</div>
+      </div>
+    </div>
+
     <section class="card">
       <label for="port">Port</label>
       <input id="port" type="number" min="1" max="65535" step="1" inputmode="numeric" />
@@ -404,6 +534,23 @@
         <span class="server-url" id="server-url"></span>
       </div>
       <div class="status" id="status"></div>
+
+      <div style="margin-top: 10px;">
+        <label for="password">Connection Password <span id="password-saved" class="password-saved">Saved</span></label>
+        <div class="password-wrapper">
+          <input id="password" type="password" class="password-input" autocomplete="off" />
+          <button type="button" id="password-toggle" class="password-toggle" title="Show/hide password">
+            <svg id="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <svg id="eye-off-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+              <line x1="1" y1="1" x2="23" y2="23"></line>
+            </svg>
+          </button>
+        </div>
+      </div>
 
       <div class="toggle-row">
         <label class="toggle-label" for="auto-send">
@@ -419,6 +566,12 @@
           <button id="unbind-tab" class="btn-secondary" disabled>Unbind</button>
         </div>
         <span id="bound-status" style="font-size: 11px; color: var(--muted); flex: 1; text-align: right;">No tab bound</span>
+      </div>
+
+      <div class="help-text">
+        <strong>Tab Binding:</strong> Navigate to your AI chat website, then click "Bind to Tab".
+        Messages from Handy will be typed into the bound tab automatically.
+        If your Handy app is configured to auto-open tabs, a new tab will open and bind automatically when no tab is bound.
       </div>
     </section>
 
