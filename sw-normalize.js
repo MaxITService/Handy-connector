@@ -15,22 +15,24 @@ function parseMaybeJson(text) {
 function parseMessageResponse(parsed, rawText) {
   if (parsed == null) {
     if (rawText && rawText.trim()) {
-      return { messages: [rawText.trim()], cursor: null, config: null };
+      return { messages: [rawText.trim()], cursor: null, config: null, passwordUpdate: null };
     }
-    return { messages: [], cursor: null, config: null };
+    return { messages: [], cursor: null, config: null, passwordUpdate: null };
   }
 
   if (Array.isArray(parsed)) {
-    return { messages: parsed, cursor: null, config: null };
+    return { messages: parsed, cursor: null, config: null, passwordUpdate: null };
   }
 
   if (typeof parsed === "object") {
     const config = parsed.config ?? null;
+    const passwordUpdate = typeof parsed.passwordUpdate === "string" ? parsed.passwordUpdate : null;
     if (Array.isArray(parsed.messages)) {
       return {
         messages: parsed.messages,
         cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null,
-        config
+        config,
+        passwordUpdate
       };
     }
 
@@ -38,22 +40,24 @@ function parseMessageResponse(parsed, rawText) {
       return {
         messages: [parsed],
         cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null,
-        config
+        config,
+        passwordUpdate
       };
     }
 
     return {
       messages: [parsed],
       cursor: parsed.cursor ?? parsed.nextCursor ?? parsed.next ?? null,
-      config
+      config,
+      passwordUpdate
     };
   }
 
   if (typeof parsed === "string") {
-    return { messages: [parsed], cursor: null, config: null };
+    return { messages: [parsed], cursor: null, config: null, passwordUpdate: null };
   }
 
-  return { messages: [], cursor: null, config: null };
+  return { messages: [], cursor: null, config: null, passwordUpdate: null };
 }
 
 function normalizeIncomingMessages(messages) {

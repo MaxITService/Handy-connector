@@ -50,6 +50,26 @@ async function pollOnce() {
       (msg) => !isKeepaliveMessage(msg) && !isStatusMessage(msg)
     );
 
+    // Handle password update from server (two-phase commit)
+    // 1. Save the new password locally
+    // 2. Send acknowledgement to server so it commits the password
+    if (parsedResponse.passwordUpdate) {
+      console.log("[handy-connector] Server sent password update, saving...");
+      const saved = await saveConnectorPassword(parsedResponse.passwordUpdate);
+      if (saved) {
+        console.log("[handy-connector] Password saved successfully, sending acknowledgement...");
+        // Send ack using the NEW password (server accepts both during transition)
+        const ackSent = await sendPasswordAck(settings, parsedResponse.passwordUpdate, timeoutMs);
+        if (ackSent) {
+          console.log("[handy-connector] Password update complete (two-phase commit successful)");
+        } else {
+          console.warn("[handy-connector] Password ack failed - server may still accept old password on next poll");
+        }
+      } else {
+        console.error("[handy-connector] CRITICAL: Failed to save new password. Extension may lose access on next request.");
+      }
+    }
+
     if (keepalives.length > 0) {
       void sendAck(settings);
     }

@@ -14,6 +14,32 @@ async function getConnectorPassword() {
 }
 
 /**
+ * Save the connector password to chrome.storage.sync
+ * Called when server sends passwordUpdate in response
+ * @param {string} password - The new password to save
+ */
+async function saveConnectorPassword(password) {
+  if (!password || typeof password !== "string") {
+    console.warn("[handy-connector] Attempted to save invalid password");
+    return false;
+  }
+  try {
+    await chrome.storage.sync.set({ connectorPassword: password });
+    // Verify the save worked by reading it back
+    const verify = await chrome.storage.sync.get("connectorPassword");
+    if (verify.connectorPassword === password) {
+      console.log("[handy-connector] Password saved and verified");
+      return true;
+    }
+    console.error("[handy-connector] Password save verification failed");
+    return false;
+  } catch (err) {
+    console.error("[handy-connector] Failed to save password:", err?.message || err);
+    return false;
+  }
+}
+
+/**
  * Build authorization headers with Bearer token
  */
 async function buildAuthHeaders(existingHeaders = {}) {
@@ -70,6 +96,50 @@ async function postJsonWithTimeout(url, payload, timeoutMs) {
       headers: authHeaders,
       body: JSON.stringify(payload)
     });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Send password acknowledgement to server after saving a new password.
+ * This completes the two-phase commit for password update.
+ * Must use the NEW password for authentication (server accepts both during transition).
+ * @param {object} settings - Connection settings (host, port, path)
+ * @param {string} newPassword - The new password to use for auth and acknowledge
+ * @param {number} timeoutMs - Request timeout
+ */
+async function sendPasswordAck(settings, newPassword, timeoutMs = 3000) {
+  const host = (settings.host || DEFAULT_SETTINGS.host).trim();
+  const port = Number(settings.port) || DEFAULT_SETTINGS.port;
+  const path = (settings.path || DEFAULT_SETTINGS.path).trim();
+  const url = `http://${host}:${port}${path.startsWith("/") ? path : `/${path}`}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        "Authorization": `Bearer ${newPassword}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ type: "password_ack" })
+    });
+    
+    if (response.ok) {
+      console.log("[handy-connector] Password acknowledgement sent successfully");
+      return true;
+    } else {
+      console.error("[handy-connector] Password ack failed:", response.status);
+      return false;
+    }
+  } catch (err) {
+    console.error("[handy-connector] Failed to send password ack:", err?.message || err);
+    return false;
   } finally {
     clearTimeout(timeoutId);
   }

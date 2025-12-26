@@ -10,11 +10,8 @@ async function handleReportStatus(payload = {}) {
 async function sendAck(settings) {
   try {
     const url = buildRequestUrl(settings, null);
-    await fetch(url, {
-      method: "POST",
-      body: JSON.stringify({ type: "keepalive_ack", ts: Date.now() }),
-      headers: { "Content-Type": "application/json" }
-    });
+    const timeoutMs = Number(settings.timeoutMs) || DEFAULT_SETTINGS.timeoutMs;
+    await postJsonWithTimeout(url, { type: "keepalive_ack", ts: Date.now() }, timeoutMs);
   } catch (err) {
     console.warn("[handy-connector] Failed to send ack", err);
   }

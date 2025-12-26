@@ -22,6 +22,7 @@
 - If server returns 401 Unauthorized, a user-friendly error is shown: "Authentication failed. Check that your password matches the Handy app."
 - Popup includes a password input field with show/hide toggle (eye icon).
 - Password auto-saves on change with debounce (500ms delay).
+- **Auto-Update Flow**: On first connection with the default password, the server generates a unique 32-char hex password and sends it in the response as `passwordUpdate`. The extension saves this immediately via `saveConnectorPassword()` and uses it for all future requests. This one-time exchange ensures each install has a unique password.
 
 ## Popup
 
