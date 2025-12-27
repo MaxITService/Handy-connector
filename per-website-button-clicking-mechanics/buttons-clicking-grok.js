@@ -2,6 +2,7 @@
 
 async function processGrokIncomingMessage(payload, options = {}) {
     const text = typeof payload === "string" ? payload : (payload.text || "");
+    const attachments = payload.attachments || [];
     const editorElement = window.ButtonsClickingShared.findEditor();
 
     if (!editorElement) {
@@ -9,28 +10,100 @@ async function processGrokIncomingMessage(payload, options = {}) {
         return { status: "editor_not_found" };
     }
 
+    let attachmentResult = null;
+    if (attachments.length) {
+        attachmentResult = await attachFilesToGrok(attachments);
+        if (attachmentResult.status !== "attached") {
+            logConCgp("[grok] Attachment failed:", attachmentResult.reason);
+        }
+    }
+
     const inserted = await insertTextIntoGrokEditor(editorElement, text);
-    if (!inserted) {
-        return { status: "insert_failed" };
+    if (!inserted && (!attachments.length || attachmentResult?.status !== "attached")) {
+        return { status: "insert_failed", attachments: attachmentResult };
     }
 
     if (!options.autoSend) {
-        return { status: "pasted" };
+        return { status: "pasted", attachments: attachmentResult };
     }
 
-    // Short delay before auto-send
+    // Grok needs time to process attachments
+    const hasAttachments = attachmentResult?.status === "attached";
+    const maxAttempts = hasAttachments ? 100 : 25;
+    const interval = hasAttachments ? 300 : 200;
+
     await new Promise(r => setTimeout(r, 100));
 
     return window.ButtonsClickingShared.performAutoSend({
-        interval: 200,
-        maxAttempts: 25,
+        interval,
+        maxAttempts,
         preClickValidation: () => {
             const isTextArea = editorElement.value !== undefined;
             const currentText = isTextArea ? editorElement.value.trim() : editorElement.innerText.trim();
-            return currentText.length > 0;
+            return currentText.length > 0 || hasAttachments;
         },
         clickAction: (btn) => window.MaxExtensionUtils.simulateClick(btn)
     });
+}
+
+/**
+ * Attaches files to Grok using the hidden file input.
+ * Grok has a file input that accepts all file types.
+ */
+async function attachFilesToGrok(attachments) {
+    const fileInput = document.querySelector('input[type="file"]');
+    if (!fileInput) {
+        return { status: "failed", reason: "input_not_found" };
+    }
+
+    const files = [];
+    for (const attachment of attachments) {
+        try {
+            const file = await buildGrokAttachmentFile(attachment);
+            if (file) files.push(file);
+        } catch (err) {
+            logConCgp("[grok] Failed to build file object:", err);
+        }
+    }
+
+    if (!files.length) {
+        return { status: "failed", reason: "no_valid_files" };
+    }
+
+    try {
+        const dataTransfer = new DataTransfer();
+        const maxFiles = fileInput.multiple ? files.length : 1;
+        for (let i = 0; i < maxFiles; i++) {
+            dataTransfer.items.add(files[i]);
+        }
+        fileInput.files = dataTransfer.files;
+        fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+        logConCgp(`[grok] Injected ${maxFiles} file(s) into file input.`);
+        return { status: "attached", count: maxFiles };
+    } catch (err) {
+        logConCgp("[grok] File injection failed:", err);
+        return { status: "failed", reason: "inject_error" };
+    }
+}
+
+async function buildGrokAttachmentFile(attachment) {
+    const name = attachment.filename || "attachment";
+    const type = attachment.mime || "image/png";
+
+    if (attachment.bytes) {
+        const blob = new Blob([attachment.bytes], { type });
+        return new File([blob], name, { type });
+    }
+
+    if (attachment.blobUrl) {
+        const response = await fetch(attachment.blobUrl);
+        if (!response.ok) throw new Error("fetch_failed");
+        const blob = await response.blob();
+        return new File([blob], name, { type: blob.type || type });
+    }
+
+    return null;
 }
 
 async function insertTextIntoGrokEditor(editorElement, textToInsert) {
@@ -43,13 +116,11 @@ async function insertTextIntoGrokEditor(editorElement, textToInsert) {
         editorElement.focus();
 
         if (isTextArea) {
-            // For textarea elements
             editorElement.value = editorElement.value + text;
             editorElement.dispatchEvent(new Event("input", { bubbles: true }));
             editorElement.dispatchEvent(new Event("change", { bubbles: true }));
             editorElement.setSelectionRange(editorElement.value.length, editorElement.value.length);
         } else {
-            // For contenteditable elements
             editorElement.innerText = editorElement.innerText + text;
             editorElement.dispatchEvent(new Event("input", { bubbles: true }));
             if (window.MaxExtensionUtils?.moveCursorToEnd) {
@@ -57,7 +128,7 @@ async function insertTextIntoGrokEditor(editorElement, textToInsert) {
             }
         }
 
-        // Simulate a final keystroke for the last character to trigger auto-resize (Grok-specific)
+        // Simulate keystroke for auto-resize
         await simulateGrokLastKeystroke(editorElement, text.slice(-1), isTextArea);
 
         return true;
@@ -92,3 +163,4 @@ async function simulateGrokLastKeystroke(editorElement, char, isTextArea) {
 }
 
 window.processGrokIncomingMessage = processGrokIncomingMessage;
+
