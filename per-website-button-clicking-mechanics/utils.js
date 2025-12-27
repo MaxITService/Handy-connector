@@ -52,6 +52,9 @@ class InjectionTargetsOnWebsite {
     if (currentHostname.includes("perplexity.ai")) {
       return "Perplexity";
     }
+    if (currentHostname.includes("gemini.google.com")) {
+      return "Gemini";
+    }
     return "Unknown";
   }
 
@@ -89,6 +92,22 @@ class InjectionTargetsOnWebsite {
         ],
         stopButtons: [
           "button[aria-label=\"Stop\"]",
+          "button[data-testid=\"stop-button\"]"
+        ]
+      },
+      Gemini: {
+        sendButtons: [
+          "button[aria-label=\"Send message\"]",
+          "button[data-testid=\"send-button\"]",
+          "div.send-button-container button"
+        ],
+        editors: [
+          "div[contenteditable=\"true\"].ql-editor",
+          "div[contenteditable=\"true\"]",
+          ".ql-editor"
+        ],
+        stopButtons: [
+          "button[aria-label=\"Stop generating\"]",
           "button[data-testid=\"stop-button\"]"
         ]
       }

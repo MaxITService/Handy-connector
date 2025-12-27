@@ -176,7 +176,7 @@ function isStatusText(text) {
 }
 
 function isSupportedSite(site) {
-  return site === "ChatGPT" || site === "Perplexity";
+  return site === "ChatGPT" || site === "Perplexity" || site === "Gemini";
 }
 
 async function getAutoSendSetting() {
@@ -199,6 +199,9 @@ async function dispatchToSite(site, payload, autoSend) {
       };
     }
     return result;
+  }
+  if (site === "Gemini" && typeof window.processGeminiIncomingMessage === "function") {
+    return await window.processGeminiIncomingMessage(payload, { autoSend });
   }
   return { status: "unsupported_site" };
 }
