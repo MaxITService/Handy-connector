@@ -191,14 +191,7 @@ async function dispatchToSite(site, payload, autoSend) {
     return await window.processChatGPTIncomingMessage(payload, { autoSend });
   }
   if (site === "Perplexity" && typeof window.processPerplexityIncomingMessage === "function") {
-    const result = await window.processPerplexityIncomingMessage(payload.text, { autoSend });
-    if (payload.attachments.length) {
-      return {
-        ...result,
-        attachments: { status: "unsupported", reason: "site_not_supported" }
-      };
-    }
-    return result;
+    return await window.processPerplexityIncomingMessage(payload, { autoSend });
   }
   if (site === "Gemini" && typeof window.processGeminiIncomingMessage === "function") {
     return await window.processGeminiIncomingMessage(payload, { autoSend });

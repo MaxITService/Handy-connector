@@ -1,7 +1,8 @@
 'use strict';
 
-async function processPerplexityIncomingMessage(customText, options = {}) {
-  const text = customText == null ? "" : String(customText);
+async function processPerplexityIncomingMessage(payload, options = {}) {
+  const text = typeof payload === "string" ? payload : (payload.text || "");
+  const attachments = payload.attachments || [];
   const editorElement = window.ButtonsClickingShared.findEditor();
 
   if (!editorElement) {
@@ -9,23 +10,97 @@ async function processPerplexityIncomingMessage(customText, options = {}) {
     return { status: "editor_not_found" };
   }
 
+  let attachmentResult = null;
+  if (attachments.length) {
+    attachmentResult = await attachFilesToPerplexity(editorElement, attachments);
+    if (attachmentResult.status !== "attached") {
+      logConCgp("[perplexity] Attachment failed:", attachmentResult.reason);
+    }
+  }
+
   const inserted = insertTextIntoPerplexityEditor(editorElement, text);
-  if (!inserted) {
-    return { status: "insert_failed" };
+  if (!inserted && (!attachments.length || attachmentResult.status !== "attached")) {
+    return { status: "insert_failed", attachments: attachmentResult };
   }
 
   if (!options.autoSend) {
-    return { status: "pasted" };
+    return { status: "pasted", attachments: attachmentResult };
   }
 
-  await sleep(150);
+  // Perplexity might need a moment to process attachments
+  const hasAttachments = attachmentResult?.status === "attached";
+  const maxAttempts = hasAttachments ? 100 : 25;
+  const interval = hasAttachments ? 300 : 200;
 
   return window.ButtonsClickingShared.performAutoSend({
-    interval: 200,
-    maxAttempts: 25,
+    interval,
+    maxAttempts,
     isEnabled: isPerplexityButtonEnabled,
-    preClickValidation: () => perplexityEditorHasContent(text, editorElement)
+    preClickValidation: () => {
+      const hasContent = perplexityEditorHasContent(text, editorElement);
+      return hasContent || hasAttachments;
+    }
   });
+}
+
+/**
+ * Attaches files by simulating a Paste event.
+ * Perplexity responds well to direct paste into the textarea.
+ */
+async function attachFilesToPerplexity(editor, attachments) {
+  const files = [];
+  for (const attachment of attachments) {
+    try {
+      const file = await buildAttachmentFile(attachment);
+      if (file) files.push(file);
+    } catch (err) {
+      logConCgp("[perplexity] Failed to build file object:", err);
+    }
+  }
+
+  if (!files.length) {
+    return { status: "failed", reason: "no_valid_files" };
+  }
+
+  try {
+    const dataTransfer = new DataTransfer();
+    for (const file of files) {
+      dataTransfer.items.add(file);
+    }
+
+    const pasteEvent = new ClipboardEvent('paste', {
+      clipboardData: dataTransfer,
+      bubbles: true,
+      cancelable: true
+    });
+
+    editor.focus();
+    editor.dispatchEvent(pasteEvent);
+    logConCgp(`[perplexity] Dispatched paste event with ${files.length} files.`);
+    return { status: "attached", count: files.length };
+  } catch (err) {
+    logConCgp("[perplexity] Paste simulation failed:", err);
+    return { status: "failed", reason: "paste_error" };
+  }
+}
+
+async function buildAttachmentFile(attachment) {
+  const name = attachment.filename || "attachment";
+  const type = attachment.mime || "image/png";
+
+  if (attachment.bytes) {
+    const blob = new Blob([attachment.bytes], { type });
+    return new File([blob], name, { type });
+  }
+
+  if (attachment.blobUrl) {
+    const response = await fetch(attachment.blobUrl);
+    if (!response.ok) throw new Error("fetch_failed");
+    const blob = await response.blob();
+    return new File([blob], name, { type: blob.type || type });
+  }
+
+  return null;
 }
 
 function insertTextIntoPerplexityEditor(editorElement, textToInsert) {
@@ -73,7 +148,7 @@ function isPerplexityButtonEnabled(button) {
 function perplexityEditorHasContent(expectedText, editorElement) {
   try {
     if (!editorElement) return false;
-    const currentText = editorElement.innerText || editorElement.textContent || "";
+    const currentText = editorElement.innerText || editorElement.textContent || editorElement.value || "";
     const normalizedCurrent = currentText.replace(/\s+/g, "").toLowerCase();
 
     if (expectedText) {
@@ -96,3 +171,4 @@ function sleep(ms) {
 }
 
 window.processPerplexityIncomingMessage = processPerplexityIncomingMessage;
+

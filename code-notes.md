@@ -7,8 +7,8 @@
 - Attachment downloads are retried with a pending bundle queue, and recent message IDs are deduped across restarts.
 - Content script receives NEW_MESSAGE, inserts text, uploads attachments on ChatGPT, auto-sends when enabled.
 - Messages are dropped when a stop button is visible or a prior message is still in flight.
-- Supported sites: ChatGPT and Perplexity only (attachments are ChatGPT-only).
-- Perplexity insertion uses a main-world injector script to bypass CSP.
+- Supported sites: ChatGPT, Gemini, and Perplexity. (Attachments supported on all).
+- Perplexity insertion uses a main-world injector script for text and a "Paste Event" simulation for attachments.
 - Auto-send toggle lives in the popup (default on, stored in chrome.storage.local).
 - Status reports are POSTed to `/messages` with type `status` and prefix `[hc-status]` to avoid loops.
 - No selector auto-detection or button injection container logic is used.
@@ -71,6 +71,7 @@
 - No queueing: messages arriving while busy are dropped.
 - ChatGPT auto-send waits longer (up to ~30s) when attachments are uploading.
 - **ChatGPT File Upload**: Uses "Method 2 Pickerless" approach. It detects specific hidden file inputs (e.g., `#upload-photos`) or inputs exposed by the "Attach" menu and programmatically sets `input.files` via `DataTransfer`. This bypasses the OS file picker completely.
+- **Perplexity/Gemini File Upload**: Uses the "Paste" method. It creates a `ClipboardEvent` of type `'paste'` containing the files in the `dataTransfer` property and dispatches it directly to the editor. This is highly reliable for reactive frameworks where inputs might be temporary or hidden in the Shadow DOM.
 - **Server Path Robustness**: The extension standardizes on using `/messages`, and the reference server (`test-server.ps1`) now gracefully ignores trailing slashes to prevent 404 errors.
 
 ## Storage Architecture (Hybrid Approach)
@@ -81,6 +82,7 @@ MV3 service workers sleep after ~30s of inactivity, losing in-memory state. The 
 - **IndexedDB** (`sw-idb.js`): Attachment binary data (ArrayBuffer). Unlimited storage, native blob support. Orphaned blobs are cleaned up when messages are trimmed.
 
 **Key details:**
+
 - `maxStoredMessages` setting (default 5) controls how many messages are kept in storage.
 - When messages are trimmed, `deleteBlobsForMessage()` removes associated blobs from IndexedDB.
 - `trimMessageList()` is async because it performs IndexedDB cleanup.
