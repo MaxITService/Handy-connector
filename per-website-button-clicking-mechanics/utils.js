@@ -55,6 +55,15 @@ class InjectionTargetsOnWebsite {
     if (currentHostname.includes("gemini.google.com")) {
       return "Gemini";
     }
+    if (currentHostname.includes("claude.ai")) {
+      return "Claude";
+    }
+    if (currentHostname.includes("grok.com") || currentHostname.includes("x.com/i/grok")) {
+      return "Grok";
+    }
+    if (currentHostname.includes("aistudio.google.com")) {
+      return "AIStudio";
+    }
     return "Unknown";
   }
 
@@ -109,6 +118,52 @@ class InjectionTargetsOnWebsite {
         stopButtons: [
           "button[aria-label=\"Stop generating\"]",
           "button[data-testid=\"stop-button\"]"
+        ]
+      },
+      Claude: {
+        sendButtons: [
+          "button[aria-label=\"Send Message\"]",
+          "button[aria-label=\"Send message\"]",
+          "fieldset button[type=\"button\"]"
+        ],
+        editors: [
+          "div.ProseMirror[contenteditable=\"true\"]",
+          "div[contenteditable=\"true\"].ProseMirror",
+          "div[contenteditable=\"true\"]"
+        ],
+        stopButtons: [
+          "button[aria-label=\"Stop Response\"]",
+          "button[aria-label=\"Stop response\"]"
+        ]
+      },
+      Grok: {
+        sendButtons: [
+          "button[aria-label=\"Submit\"]",
+          "button[type=\"submit\"]"
+        ],
+        editors: [
+          "textarea[placeholder*=\"Ask\"]",
+          "textarea",
+          "div[contenteditable=\"true\"]"
+        ],
+        stopButtons: [
+          "button[aria-label=\"Stop\"]",
+          "button[aria-label=\"Stop generating\"]"
+        ]
+      },
+      AIStudio: {
+        sendButtons: [
+          "button[aria-label=\"Run\"]",
+          "button[mattooltip=\"Run\"]",
+          "button.run-button"
+        ],
+        editors: [
+          "textarea.prompt-textarea",
+          "textarea[aria-label*=\"prompt\"]",
+          "textarea"
+        ],
+        stopButtons: [
+          "button[aria-label=\"Stop\"]"
         ]
       }
     };

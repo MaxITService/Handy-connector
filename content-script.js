@@ -176,7 +176,7 @@ function isStatusText(text) {
 }
 
 function isSupportedSite(site) {
-  return site === "ChatGPT" || site === "Perplexity" || site === "Gemini";
+  return site === "ChatGPT" || site === "Perplexity" || site === "Gemini" || site === "Claude" || site === "Grok" || site === "AIStudio";
 }
 
 async function getAutoSendSetting() {
@@ -195,6 +195,15 @@ async function dispatchToSite(site, payload, autoSend) {
   }
   if (site === "Gemini" && typeof window.processGeminiIncomingMessage === "function") {
     return await window.processGeminiIncomingMessage(payload, { autoSend });
+  }
+  if (site === "Claude" && typeof window.processClaudeIncomingMessage === "function") {
+    return await window.processClaudeIncomingMessage(payload, { autoSend });
+  }
+  if (site === "Grok" && typeof window.processGrokIncomingMessage === "function") {
+    return await window.processGrokIncomingMessage(payload, { autoSend });
+  }
+  if (site === "AIStudio" && typeof window.processAIStudioIncomingMessage === "function") {
+    return await window.processAIStudioIncomingMessage(payload, { autoSend });
   }
   return { status: "unsupported_site" };
 }

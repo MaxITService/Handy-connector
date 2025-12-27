@@ -31,7 +31,11 @@
         "https://chatgpt.com/*",
         "https://www.perplexity.ai/*",
         "https://perplexity.ai/*",
-        "https://gemini.google.com/*"
+        "https://gemini.google.com/*",
+        "https://claude.ai/*",
+        "https://grok.com/*",
+        "https://x.com/i/grok*",
+        "https://aistudio.google.com/*"
       ],
       "css": ["per-website-button-clicking-mechanics/ocp_toast.css"],
       "js": [
@@ -42,6 +46,9 @@
         "per-website-button-clicking-mechanics/buttons-clicking-chatgpt.js",
         "per-website-button-clicking-mechanics/buttons-clicking-perplexity.js",
         "per-website-button-clicking-mechanics/buttons-clicking-gemini.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-claude.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-grok.js",
+        "per-website-button-clicking-mechanics/buttons-clicking-aistudio.js",
         "content-script.js"
       ]
     }
